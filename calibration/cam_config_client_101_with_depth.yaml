@@ -1,0 +1,50 @@
+head_camera:
+  enable_zmq: true
+  zmq_port: 55555
+  zmq_depth_port: 55560  # 深度单独端口，避免与 color 冲突
+  enable_webrtc: true
+  webrtc_port: 60001
+  type: realsense
+  image_shape:
+  - 480
+  - 640
+  binocular: true
+  fps: 90
+  video_id: 0
+  serial_number: 409122273228  # 请替换为实际的 RealSense 相机序列号  D405 409122273228 D435 135222070706
+  physical_path: null
+  enable_depth: true  # 启用深度信息读取
+
+left_wrist_camera:
+  enable_zmq: true
+  zmq_port: 55556
+  zmq_depth_port: 55561  # 深度单独端口
+  enable_webrtc: false
+  webrtc_port: 60002
+  type: realsense
+  image_shape:
+  - 480
+  - 640
+  binocular: false
+  fps: 90
+  video_id: 2
+  serial_number: 409122273564
+  physical_path: null
+  enable_depth: true  # 三视角均存深度
+
+right_wrist_camera:
+  enable_zmq: true
+  zmq_port: 55557
+  zmq_depth_port: 55562  # 深度单独端口
+  enable_webrtc: false
+  webrtc_port: 60003
+  type: realsense
+  image_shape:
+  - 480
+  - 640
+  binocular: false
+  fps: 90
+  video_id: 2
+  serial_number: 352122274412
+  physical_path: null
+  enable_depth: true  # 三视角均存深度
