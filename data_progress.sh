@@ -5,4 +5,4 @@ source /opt/miniconda3/etc/profile.d/conda.sh
 
 conda activate robotwin
 
-python code_tools/convert_hdf5_to_zarr.py
+python code_tools/convert_hdf5_to_zarr.py 
