@@ -131,12 +131,14 @@ qtcreator-*
 COLCON_IGNORE
 AMENT_IGNORE
 
-**/datasets
 **/weights
 **/test
-act/datasets/
 data_points_test/
 calibration_data_ark/
 point_cloud_output/
 
+datasets/*
+datasets_zarr/*
+!datasets_zarr/.gitkeep
+!datasets/.gitkeep
 *.zarr

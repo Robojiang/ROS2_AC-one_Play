@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 
 # ================= 配置 =================
-HDF5_PATH = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets/episode_4.hdf5"
+HDF5_PATH = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets/episode_10.hdf5"
 CALIBRATION_DIR = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/calibration_results"
 INTRINSICS_FILE = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/calibration_results/intrinsics.json"
 
@@ -337,9 +337,49 @@ def main():
         for T, label, size in coordinate_frames:
             T_new = T_LB_H_inv @ T
             coordinate_frames_left_base.append((T_new, label, size))
+        
+        # 添加左臂基座坐标系 (原点)
+        coordinate_frames_left_base.append((np.eye(4), "Left_Base", 0.2))
+        
+        # 添加左臂末端坐标系
+        T_LB_LE_in_leftbase = T_LB_LE
+        coordinate_frames_left_base.append((T_LB_LE_in_leftbase, "Left_End", 0.12))
+        
+        # 添加右臂基座坐标系
+        T_RB_in_leftbase = T_LB_H_inv @ T_H_RB
+        coordinate_frames_left_base.append((T_RB_in_leftbase, "Right_Base", 0.2))
+        
+        # 添加右臂末端坐标系
+        T_RE_in_leftbase = T_LB_H_inv @ T_H_RB @ T_RB_RE
+        coordinate_frames_left_base.append((T_RE_in_leftbase, "Right_End", 0.12))
+        
         coordinate_frames = coordinate_frames_left_base
         
         print(f"   ✅ 已转换到左臂基座坐标系")
+        print(f"\n📍 坐标系位置 (相对于左臂基座):")
+        print(f"   Left Base:  [0, 0, 0] (原点)")
+        print(f"   Left End:   {T_LB_LE[:3, 3]}")
+        print(f"   Right Base: {T_RB_in_leftbase[:3, 3]}")
+        print(f"   Right End:  {T_RE_in_leftbase[:3, 3]}")
+    else:
+        # 如果是Head坐标系,也添加机械臂坐标系
+        # 添加左臂基座
+        coordinate_frames.append((T_H_LB, "Left_Base", 0.2))
+        # 添加左臂末端
+        T_H_LE = T_H_LB @ T_LB_LE
+        coordinate_frames.append((T_H_LE, "Left_End", 0.12))
+        # 添加右臂基座
+        coordinate_frames.append((T_H_RB, "Right_Base", 0.2))
+        # 添加右臂末端
+        T_H_RE = T_H_RB @ T_RB_RE
+        coordinate_frames.append((T_H_RE, "Right_End", 0.12))
+        
+        print(f"\n📍 坐标系位置 (相对于Head):")
+        print(f"   Head:       [0, 0, 0] (原点)")
+        print(f"   Left Base:  {T_H_LB[:3, 3]}")
+        print(f"   Left End:   {T_H_LE[:3, 3]}")
+        print(f"   Right Base: {T_H_RB[:3, 3]}")
+        print(f"   Right End:  {T_H_RE[:3, 3]}")
     
     # 6. 工作空间裁剪
     if USE_WORKSPACE_CROP:
@@ -421,7 +461,7 @@ def main():
         # 保存结果
         frame_suffix = "leftbase" if OUTPUT_FRAME == 'left_base' else "head"
         output_path = f"pointcloud_frame{FRAME_INDEX}_fps{FPS_SAMPLE_POINTS}_{frame_suffix}.npy"
-        np.save(output_path, fps_cloud)
+        # np.save(output_path, fps_cloud)
         print(f"\n💾 已保存点云到: {output_path}")
         print(f"   形状: {fps_cloud.shape}")
         print(f"   坐标系: {OUTPUT_FRAME}")

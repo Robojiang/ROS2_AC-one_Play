@@ -19,9 +19,11 @@ from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 
 # ================= 配置 =================
-DATASETS_DIR = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets"
-CALIBRATION_DIR = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/calibration_results"
-INTRINSICS_FILE = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/calibration_results/intrinsics.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASETS_DIR = os.path.join(BASE_DIR, "datasets")
+DATASETS_ZARR_DIR = os.path.join(BASE_DIR, "datasets_zarr")
+CALIBRATION_DIR = os.path.join(BASE_DIR, "calibration_results")
+INTRINSICS_FILE = os.path.join(CALIBRATION_DIR, "intrinsics.json")
 
 # 点云配置
 MAX_DEPTH_Head = 1.0  # 米
@@ -36,7 +38,7 @@ WORKSPACE_Z_RANGE = [-0.2, 1.0]
 
 # 关键帧检测
 GRIPPER_DELTA = 0.05  # 夹爪变化阈值
-MIN_INTERVAL = 5  # 最小关键帧间隔
+MIN_INTERVAL = 20  # 最小关键帧间隔
 
 # ================= 标定加载函数 =================
 
@@ -165,6 +167,7 @@ def generate_point_cloud_single_frame(head_depth, head_color, left_depth, left_c
         return np.zeros((FPS_SAMPLE_POINTS, 6), dtype=np.float32)
     
     # 4. 合并并转换到左臂基座坐标系
+    # 注意: T_LB_H实际就是Head->LeftBase, 和pointcloud_from_hdf5.py中用法一致
     merged_cloud = np.vstack(clouds_global)
     merged_cloud = transform_point_cloud(merged_cloud, T_LB_H)
     
@@ -243,16 +246,16 @@ def load_hdf5_episode(hdf5_path):
 
 # ================= 关键帧检测 =================
 
-def transform_right_endpose_to_left_base(right_eef_array, T_LB_H, T_H_RB):
+def transform_right_endpose_to_left_base(right_eef_array, T_H_LB, T_H_RB):
     """
     将右臂末端姿态从右臂基座坐标系转换到左臂基座坐标系
     right_eef_array: (N, 7) [x, y, z, rx, ry, rz, gripper]
-    T_LB_H: (4, 4) 左臂基座到Head的变换矩阵
+    T_H_LB: (4, 4) Head到左臂基座的变换矩阵 (注意: 文件名head_base_to_left的含义)
     T_H_RB: (4, 4) Head到右臂基座的变换矩阵
     返回: (N, 7) 在左臂基座坐标系下的姿态
     
-    变换链: LeftBase -> Head -> RightBase -> RightEnd
-    即: T_LB_RE = T_LB_H @ T_H_RB @ T_RB_RE
+    变换链: Head -> RightBase -> RightEnd, 然后转到LeftBase
+    即: T_LB_RE = T_H_LB @ T_H_RB @ T_RB_RE
     """
     N = len(right_eef_array)
     result = np.zeros_like(right_eef_array)
@@ -261,8 +264,8 @@ def transform_right_endpose_to_left_base(right_eef_array, T_LB_H, T_H_RB):
         # 提取右臂末端在右臂基座系下的姿态
         T_RB_RE = eef_to_matrix(right_eef_array[i])
         
-        # 转换到左臂基座系: LeftBase -> Head -> RightBase -> RightEnd
-        T_LB_RE = T_LB_H @ T_H_RB @ T_RB_RE
+        # 转换到左臂基座系: Head -> RightBase -> RightEnd, 再转到LeftBase
+        T_LB_RE = T_H_LB @ T_H_RB @ T_RB_RE
         
         # 提取位置
         result[i, :3] = T_LB_RE[:3, 3]
@@ -310,25 +313,32 @@ def get_keyframe_mask(eef_data, gripper_delta=0.05, min_interval=5):
 
 # ================= 主转换函数 =================
 
-def convert_to_zarr(max_episodes=None, output_name="converted_data"):
+def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
     """
-    将HDF5数据转换为Zarr格式
+    将单个任务的HDF5数据转换为Zarr格式
     
     Args:
+        task_name: 任务名称 (文件夹名)
+        task_dir: 任务文件夹路径
         max_episodes: 用于debug,只转换前N个episode (None表示转换全部)
-        output_name: 输出文件名
     """
     # 自动扫描HDF5文件
-    print("\n🔍 扫描HDF5文件...")
-    hdf5_files = sorted([f for f in os.listdir(DATASETS_DIR) if f.endswith('.hdf5')])
-    print(f"找到 {len(hdf5_files)} 个HDF5文件")
+    print(f"\n{'='*80}")
+    print(f"🎯 任务: {task_name}")
+    print(f"{'='*80}")
+    print(f"📁 数据目录: {task_dir}")
+    
+    hdf5_files = sorted([f for f in os.listdir(task_dir) if f.endswith('.hdf5')])
+    print(f"🔍 找到 {len(hdf5_files)} 个HDF5文件")
     
     if len(hdf5_files) == 0:
-        print("❌ 未找到任何HDF5文件")
+        print(f"⚠️  任务 {task_name} 没有HDF5文件,跳过")
         return
     
     # 输出路径
-    save_dir = f"{output_name}.zarr"
+    os.makedirs(DATASETS_ZARR_DIR, exist_ok=True)
+    save_dir = os.path.join(DATASETS_ZARR_DIR, f"{task_name}.zarr")
+    
     if os.path.exists(save_dir):
         print(f"⚠️  删除已存在的文件: {save_dir}")
         shutil.rmtree(save_dir)
@@ -350,7 +360,10 @@ def convert_to_zarr(max_episodes=None, output_name="converted_data"):
     if np.array_equal(T_RB_H, np.eye(4)):
         T_RB_H = load_calibration_matrix("head_base_to_right.npy")
     
-    T_H_LB = np.linalg.inv(T_LB_H)
+    # 注意: 文件名head_base_to_left实际表示 Head->LeftBase 的变换
+    # 文件名head_base_to_right实际表示 RightBase->Head 的变换 (需要取逆得到Head->RightBase)
+    # 和pointcloud_from_hdf5.py保持一致
+    T_H_LB = T_LB_H
     T_H_RB = np.linalg.inv(T_RB_H)
     
     intrinsics = {
@@ -374,9 +387,9 @@ def convert_to_zarr(max_episodes=None, output_name="converted_data"):
     if len(files_to_process) > 1:
         print(f"最后一个文件: {files_to_process[-1]}")
     
-    for hdf5_filename in tqdm(files_to_process, desc="Converting Episodes"):
+    for hdf5_filename in tqdm(files_to_process, desc=f"Converting {task_name}"):
         # 构建文件路径
-        hdf5_path = os.path.join(DATASETS_DIR, hdf5_filename)
+        hdf5_path = os.path.join(task_dir, hdf5_filename)
         
         if not os.path.exists(hdf5_path):
             print(f"\n⚠️  跳过不存在的文件: {hdf5_path}")
@@ -397,9 +410,10 @@ def convert_to_zarr(max_episodes=None, output_name="converted_data"):
             left_eef = eef_data[:, :7]
             right_eef = eef_data[:, 7:14]
             
-            # 生成点云 (每一帧)
+            # 生成点云 (每一帧) - 显示帧级别进度
             point_clouds = []
-            for t in range(T):
+            print(f"\n  📊 {hdf5_filename}: 生成 {T} 帧点云...")
+            for t in tqdm(range(T), desc=f"  Processing frames", leave=False, ncols=80):
                 pc = generate_point_cloud_single_frame(
                     data['head_depths'][t], data['head_images'][t],
                     data['left_depths'][t], data['left_images'][t],
@@ -435,7 +449,7 @@ def convert_to_zarr(max_episodes=None, output_name="converted_data"):
             ep_keyframe_mask = keyframe_mask[:-1]  # (T-1,)
             ep_left_endpose = eef_data[:-1, :7]  # (T-1, 7) 左臂已经在左臂基座系
             # 右臂: 先转到Head系,再转到LeftBase系 (和点云变换一致)
-            ep_right_endpose = transform_right_endpose_to_left_base(eef_data[:-1, 7:14], T_LB_H, T_H_RB)
+            ep_right_endpose = transform_right_endpose_to_left_base(eef_data[:-1, 7:14], T_H_LB, T_H_RB)
             
             # 第一次初始化Zarr数据集
             if not zarr_datasets:
@@ -502,7 +516,7 @@ def convert_to_zarr(max_episodes=None, output_name="converted_data"):
             traceback.print_exc()
             continue
     
-    print(f"\n✅ 转换完成!")
+    print(f"\n✅ 任务 {task_name} 转换完成!")
     print(f"   总帧数: {total_count}")
     print(f"   Episodes: {len(zarr_datasets['episode_ends'][:])}")
     print(f"   保存路径: {save_dir}")
@@ -510,17 +524,90 @@ def convert_to_zarr(max_episodes=None, output_name="converted_data"):
     # 打印统计
     keyframe_count = np.sum(zarr_datasets["keyframe_mask"][:])
     print(f"   关键帧数: {keyframe_count} ({keyframe_count/total_count*100:.2f}%)")
+    print(f"{'='*80}\n")
+
+
+def convert_all_tasks(max_episodes=None, task_filter=None):
+    """
+    转换datasets目录下所有任务
+    
+    Args:
+        max_episodes: 每个任务最多转换多少个episode (None表示全部)
+        task_filter: 任务名称过滤器 (None表示全部任务, 或指定任务名列表)
+    """
+    print("\n" + "="*80)
+    print("🚀 HDF5 to Zarr 批量转换工具")
+    print("="*80)
+    
+    # 扫描datasets目录下的所有子文件夹
+    if not os.path.exists(DATASETS_DIR):
+        print(f"❌ 数据目录不存在: {DATASETS_DIR}")
+        return
+    
+    # 获取所有包含HDF5文件的子文件夹
+    task_dirs = []
+    for item in os.listdir(DATASETS_DIR):
+        item_path = os.path.join(DATASETS_DIR, item)
+        if os.path.isdir(item_path):
+            # 检查是否包含HDF5文件
+            hdf5_files = [f for f in os.listdir(item_path) if f.endswith('.hdf5')]
+            if len(hdf5_files) > 0:
+                task_dirs.append((item, item_path))
+    
+    if len(task_dirs) == 0:
+        print(f"❌ 在 {DATASETS_DIR} 下未找到包含HDF5文件的任务文件夹")
+        return
+    
+    # 应用过滤器
+    if task_filter is not None:
+        if isinstance(task_filter, str):
+            task_filter = [task_filter]
+        task_dirs = [(name, path) for name, path in task_dirs if name in task_filter]
+        
+        if len(task_dirs) == 0:
+            print(f"❌ 没有匹配的任务: {task_filter}")
+            return
+    
+    print(f"\n📋 发现 {len(task_dirs)} 个任务:")
+    for i, (task_name, _) in enumerate(task_dirs, 1):
+        print(f"   {i}. {task_name}")
+    
+    print(f"\n💾 输出目录: {DATASETS_ZARR_DIR}")
+    
+    # 逐个转换任务
+    success_count = 0
+    failed_tasks = []
+    
+    for task_name, task_path in task_dirs:
+        try:
+            convert_task_to_zarr(task_name, task_path, max_episodes)
+            success_count += 1
+        except Exception as e:
+            print(f"\n❌ 任务 {task_name} 转换失败: {e}")
+            import traceback
+            traceback.print_exc()
+            failed_tasks.append(task_name)
+    
+    # 最终总结
+    print("\n" + "="*80)
+    print("📊 转换总结")
+    print("="*80)
+    print(f"✅ 成功: {success_count}/{len(task_dirs)} 个任务")
+    if failed_tasks:
+        print(f"❌ 失败的任务: {', '.join(failed_tasks)}")
+    print(f"💾 输出目录: {DATASETS_ZARR_DIR}")
+    print("="*80 + "\n")
 
 # ================= 主程序 =================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="将HDF5数据集转换为Zarr格式 (含点云生成)")
-    parser.add_argument("--max_episodes", type=int, default=None, help="Debug模式:只转换前N个episodes (默认转换全部)")
-    parser.add_argument("--output", type=str, default="converted_data", help="输出文件名")
+    parser.add_argument("--max_episodes", type=int, default=None, help="每个任务最多转换多少个episodes (None表示全部)")
+    parser.add_argument("--task", type=str, default=None, help="指定要转换的任务名称 (默认转换所有任务)")
     
     args = parser.parse_args()
     
-    convert_to_zarr(
+    convert_all_tasks(
         max_episodes=args.max_episodes,
-        output_name=args.output
+        task_filter=args.task
     )

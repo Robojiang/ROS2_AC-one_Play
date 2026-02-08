@@ -143,7 +143,7 @@ def visualize_frame(zarr_path, frame_idx=0):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--zarr_path", type=str, default="test_conversion.zarr")
+    parser.add_argument("--zarr_path", type=str, default="test_converted_data.zarr")
     parser.add_argument("--frame", type=int, default=0)
     args = parser.parse_args()
     
