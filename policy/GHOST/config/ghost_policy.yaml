@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: beat_block_hammer
+  - task: pick_place_d405
 
 name: ghost_policy
 

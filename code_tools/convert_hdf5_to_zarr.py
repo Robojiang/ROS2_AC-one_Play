@@ -17,6 +17,8 @@ import shutil
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
 import open3d as o3d
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 # ================= 配置 =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -62,6 +64,12 @@ def load_calibration_matrix(filename):
     return np.eye(4)
 
 # ================= 点云生成函数 =================
+
+def generate_point_cloud_worker(args):
+    """
+    多进程worker函数,用于并行生成点云
+    """
+    return generate_point_cloud_single_frame(*args)
 
 def eef_to_matrix(eef_pose):
     """将end-effector pose转换为4x4变换矩阵"""
@@ -314,7 +322,7 @@ def get_keyframe_mask(eef_data, gripper_delta=0.05, min_interval=5):
 
 # ================= 主转换函数 =================
 
-def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
+def convert_task_to_zarr(task_name, task_dir, max_episodes=None, num_workers=8, batch_size=10):
     """
     将单个任务的HDF5数据转换为Zarr格式
     
@@ -322,6 +330,8 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
         task_name: 任务名称 (文件夹名)
         task_dir: 任务文件夹路径
         max_episodes: 用于debug,只转换前N个episode (None表示转换全部)
+        num_workers: 多进程工作进程数 (默认8)
+        batch_size: 批量处理episode数量 (默认10)
     """
     # 自动扫描HDF5文件
     print(f"\n{'='*80}")
@@ -411,18 +421,28 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
             left_eef = eef_data[:, :7]
             right_eef = eef_data[:, 7:14]
             
-            # 生成点云 (每一帧) - 显示帧级别进度
-            point_clouds = []
-            print(f"\n  📊 {hdf5_filename}: 生成 {T} 帧点云...")
-            for t in tqdm(range(T), desc=f"  Processing frames", leave=False, ncols=80):
-                pc = generate_point_cloud_single_frame(
-                    data['head_depths'][t], data['head_images'][t],
-                    data['left_depths'][t], data['left_images'][t],
-                    data['right_depths'][t], data['right_images'][t],
-                    left_eef[t], right_eef[t],
-                    intrinsics, T_H_LB, T_H_RB, T_LE_LC, T_RE_RC, T_LB_H
-                )
-                point_clouds.append(pc)
+            # 生成点云 (并行处理) - 批量加载到内存
+            print(f"\n  📊 {hdf5_filename}: 生成 {T} 帧点云 (并行: {num_workers} workers)...")
+            
+            # 准备并行处理的参数
+            frame_args = [
+                (data['head_depths'][t], data['head_images'][t],
+                 data['left_depths'][t], data['left_images'][t],
+                 data['right_depths'][t], data['right_images'][t],
+                 left_eef[t], right_eef[t],
+                 intrinsics, T_H_LB, T_H_RB, T_LE_LC, T_RE_RC, T_LB_H)
+                for t in range(T)
+            ]
+            
+            # 使用多进程并行生成点云
+            with Pool(num_workers) as pool:
+                point_clouds = list(tqdm(
+                    pool.imap(generate_point_cloud_worker, frame_args),
+                    total=T,
+                    desc=f"  Processing frames",
+                    leave=False,
+                    ncols=80
+                ))
             
             point_clouds = np.array(point_clouds)  # (T, 1024, 6)
             
@@ -455,14 +475,15 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
             # 第一次初始化Zarr数据集
             if not zarr_datasets:
                 print("\n📦 初始化Zarr数据集...")
+                # 增大chunk size以利用大内存,减少I/O次数
                 chunks = {
-                    "state": (100, 14),
-                    "action": (100, 14),
-                    "point_cloud": (100, FPS_SAMPLE_POINTS, 6),
-                    "images": (100, 4, 240, 320, 3),
-                    "keyframe_mask": (100,),
-                    "left_endpose": (100, 7),
-                    "right_endpose": (100, 7),
+                    "state": (1000, 14),
+                    "action": (1000, 14),
+                    "point_cloud": (500, FPS_SAMPLE_POINTS, 6),
+                    "images": (200, 4, 240, 320, 3),
+                    "keyframe_mask": (1000,),
+                    "left_endpose": (1000, 7),
+                    "right_endpose": (1000, 7),
                     "episode_ends": (100,)
                 }
                 
@@ -528,13 +549,15 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
     print(f"{'='*80}\n")
 
 
-def convert_all_tasks(max_episodes=None, task_filter=None):
+def convert_all_tasks(max_episodes=None, task_filter=None, num_workers=8, batch_size=10):
     """
     转换datasets目录下所有任务
     
     Args:
         max_episodes: 每个任务最多转换多少个episode (None表示全部)
         task_filter: 任务名称过滤器 (None表示全部任务, 或指定任务名列表)
+        num_workers: 多进程工作进程数 (默认8)
+        batch_size: 批量处理episode数量 (默认10)
     """
     print("\n" + "="*80)
     print("🚀 HDF5 to Zarr 批量转换工具")
@@ -581,7 +604,7 @@ def convert_all_tasks(max_episodes=None, task_filter=None):
     
     for task_name, task_path in task_dirs:
         try:
-            convert_task_to_zarr(task_name, task_path, max_episodes)
+            convert_task_to_zarr(task_name, task_path, max_episodes, num_workers, batch_size)
             success_count += 1
         except Exception as e:
             print(f"\n❌ 任务 {task_name} 转换失败: {e}")
@@ -605,10 +628,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="将HDF5数据集转换为Zarr格式 (含点云生成)")
     parser.add_argument("--max_episodes", type=int, default=None, help="每个任务最多转换多少个episodes (None表示全部)")
     parser.add_argument("--task", type=str, default=None, help="指定要转换的任务名称 (默认转换所有任务)")
+    parser.add_argument("--num_workers", type=int, default=16, help="多进程工作进程数 (默认16,适合大内存)")
+    parser.add_argument("--batch_size", type=int, default=20, help="批量处理episode数量 (默认20)")
     
     args = parser.parse_args()
     
+    print(f"\n⚙️  配置: num_workers={args.num_workers}, batch_size={args.batch_size}")
+    print(f"💡 提示: 可用CPU核心数={cpu_count()}, 建议num_workers不超过核心数\n")
+    
     convert_all_tasks(
         max_episodes=args.max_episodes,
-        task_filter=args.task
+        task_filter=args.task,
+        num_workers=args.num_workers,
+        batch_size=args.batch_size
     )

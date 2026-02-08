@@ -1,5 +1,5 @@
 defaults:
-  - task: beat_block_hammer
+  - task: pick_place_d405
   - _self_
 
 name: ghost_keyframe_policy
