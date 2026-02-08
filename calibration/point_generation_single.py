@@ -12,7 +12,7 @@ import open3d as o3d
 # ================= 配置 =================
 DATA_ROOT = "data_points_test"
 RESULTS_DIR = "calibration_results"
-INTRINSICS_FILE = "calibration_data_ark/intrinsics.json"
+INTRINSICS_FILE = "calibration_results/intrinsics.json"
 OUTPUT_DIR = "point_cloud_output"
 USE_ICP_REFINEMENT = True # 设置为 True 启用 ICP 修正
 
