@@ -66,13 +66,17 @@ class GHOSTKeyframeDataset(BaseDataset):
              # Try to find it relative to workspace root or typical paths
              # Check if it exists relative to current working directory
              if not os.path.exists(zarr_path):
-                 # Check if it exists relative to VGC directory (policy/VGC)
-                 vgc_zarr_path = os.path.join(policy_dir, 'VGC', zarr_path)
-                 if os.path.exists(vgc_zarr_path):
-                     zarr_path = vgc_zarr_path
-                     print(f"[GHOSTKeyframeDataset] Resolved path to VGC dir: {zarr_path}")
+                 # Check relative to workspace root (parent of policy dir)
+                 workspace_root = os.path.dirname(policy_dir)
+                 workspace_zarr_path = os.path.join(workspace_root, zarr_path)
+                 
+                 if os.path.exists(workspace_zarr_path):
+                     zarr_path = workspace_zarr_path
+                     print(f"[GHOSTKeyframeDataset] Resolved path to Workspace root: {zarr_path}")
                  else:
-                     print(f"[GHOSTKeyframeDataset] Warning: Zarr path not found: {zarr_path} or {vgc_zarr_path}")
+                     print(f"[GHOSTKeyframeDataset] Warning: Zarr path not found in typical locations:")
+                     print(f"  - CWD: {os.path.abspath(zarr_path)}")
+                     print(f"  - Workspace: {workspace_zarr_path}")
             
         print(f"[GHOSTKeyframeDataset] Loading dataset from: {zarr_path}")
         

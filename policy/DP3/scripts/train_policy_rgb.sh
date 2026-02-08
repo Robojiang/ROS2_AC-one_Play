@@ -36,6 +36,7 @@ export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 python train_dp3.py --config-name=${config_name}.yaml \
                             task_name=${task_name} \
+                            task.dataset.zarr_path="datasets_zarr/${task_name}.zarr" \
                             hydra.run.dir=${run_dir} \
                             training.debug=$DEBUG \
                             training.seed=${seed} \

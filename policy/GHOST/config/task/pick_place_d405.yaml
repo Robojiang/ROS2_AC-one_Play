@@ -1,9 +1,9 @@
-name: beat_block_hammer
-dataset_type: easy
+name: pick_place_d405
+dataset_type: hard
 
 dataset:
   _target_: dataset.ghost_dataset.GHOSTDataset
-  zarr_path: data/beat_block_hammer-demo_3d_vision_${task.dataset_type}-100-ppi.zarr
+  zarr_path: datasets_zarr/${task.name}.zarr
   horizon: ${policy.horizon}
   pad_before: ${eval:'${policy.n_obs_steps}-1'}
   pad_after: ${eval:'${policy.n_action_steps}-1'}

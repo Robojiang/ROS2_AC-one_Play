@@ -26,7 +26,6 @@ policy_dir = os.path.dirname(ghost_dir)
 dp3_pkg_path = os.path.join(policy_dir, 'DP3', '3D-Diffusion-Policy')
 sys.path.append(dp3_pkg_path)
 sys.path.append(os.path.join(dp3_pkg_path, 'diffusion_policy_3d'))
-sys.path.append(os.path.join(policy_dir, 'VGC')) # Add VGC for dataset
 
 from diffusion_policy_3d.dataset.base_dataset import BaseDataset
 from diffusion_policy_3d.env_runner.base_runner import BaseRunner

@@ -142,3 +142,4 @@ datasets_zarr/*
 !datasets_zarr/.gitkeep
 !datasets/.gitkeep
 *.zarr
+policy/GHOST/data/*
