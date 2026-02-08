@@ -1,0 +1,29 @@
+name: stack_blocks_two
+dataset_type: easy
+
+dataset:
+  _target_: dataset.ghost_dataset.GHOSTDataset
+  zarr_path: data/stack_blocks_two-demo_3d_vision_${task.dataset_type}-100-ppi.zarr
+  horizon: ${policy.horizon}
+  pad_before: ${eval:'${policy.n_obs_steps}-1'}
+  pad_after: ${eval:'${policy.n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: null
+
+shape_meta:
+  action:
+    shape: [14]
+  obs:
+    agent_pos:
+      shape: [32]
+    point_cloud:
+      shape: [1024, 7]
+
+env_runner:
+  _target_: diffusion_policy_3d.env_runner.robot_runner.RobotRunner
+  max_steps: 300
+  n_obs_steps: ${policy.n_obs_steps}
+  n_action_steps: ${policy.n_action_steps}
+  task_name: ${name}
+

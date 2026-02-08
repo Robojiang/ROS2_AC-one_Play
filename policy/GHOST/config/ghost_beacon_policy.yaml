@@ -1,0 +1,144 @@
+defaults:
+  - task: beat_block_hammer
+  - _self_
+
+name: ghost_beacon_policy
+
+# Override dataset configuration to use the Keyframe version
+task:
+  dataset:
+    _target_: ghost_keyframe_dataset.GHOSTKeyframeDataset
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  # optimization
+  lr_scheduler: "cosine"
+  lr_warmup_steps: 500
+  num_epochs: 800
+  gradient_accumulate_every: 1
+  use_ema: True
+  rollout_every: 200
+  checkpoint_every: 200
+  val_every: 50
+  sample_every: 50
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+  # saving
+  output_dir: "data/outputs/${name}/${task.name}"
+
+policy:
+  _target_: ghost_beacon_policy.GHOSTBeaconPolicy
+  shape_meta: ${task.shape_meta}
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 100
+    beta_schedule: 'squaredcos_cap_v2'
+    clip_sample: True
+    prediction_type: 'epsilon'
+
+  horizon: 16
+  n_action_steps: 8
+  n_obs_steps: 2
+  num_inference_steps: 100
+  obs_as_global_cond: True
+  diffusion_step_embed_dim: 256
+  down_dims: [256, 512, 1024]
+  kernel_size: 5
+  n_groups: 8
+  condition_type: "film"
+  
+  # GHOST Specific
+  use_pc_color: True
+  use_aux_points: True
+  pointnet_type: "pointnet"
+  aux_point_num: 200
+  aux_length: 0.2
+  
+  # Beacon specific tweak: Make side length closer to main length if you want beacons at the "tips"
+  aux_trident_side_len: 0.15 
+  aux_trident_max_width: 0.08
+  aux_radius: 0.01
+
+  # Keyframe Prediction (P1)
+  use_keyframe_prediction: True
+  keyframe_model_prob: 0.0 
+  keyframe_pred_loss_weight: 1.0
+  keyframe_noise_std: 0.02 
+  
+  # Beacon Heatmap Sigma
+  beacon_sigma: 0.3
+
+  # Curriculum Learning Config
+  keyframe_model_warmup_epochs: ${eval:'int(${training.num_epochs} * 0.2)'}
+  keyframe_model_ramp_epochs: ${eval:'int(${training.num_epochs} * 0.1)'}
+  keyframe_model_max_prob: 1
+  
+  # PointNet Config
+  pointcloud_encoder_cfg:
+    out_channels: 256
+    use_layernorm: True
+    final_norm: 'layernorm'
+
+ema:
+  _target_: diffusion_policy_3d.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 180
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: ${dataloader.batch_size}
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+
+logging:
+  group: ${name}
+  id: null
+  mode: online
+  name: ${now:%H.%M.%S}_${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}
+  project: ghost_beacon_policy
+  resume: true
+  tags:
+  - ghost
+  - beacon
+
+checkpoint:
+  save_ckpt: True
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 1
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%H.%M.%S}_${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}
+  sweep:
+    dir: data/outputs/${now:%H.%M.%S}_${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}
+    subdir: ${hydra.job.num}
