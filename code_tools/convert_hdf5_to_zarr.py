@@ -20,10 +20,11 @@ import open3d as o3d
 
 # ================= 配置 =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(BASE_DIR)  # 上一级目录
 DATASETS_DIR = os.path.join(BASE_DIR, "datasets")
 DATASETS_ZARR_DIR = os.path.join(BASE_DIR, "datasets_zarr")
 CALIBRATION_DIR = os.path.join(BASE_DIR, "calibration_results")
-INTRINSICS_FILE = os.path.join(CALIBRATION_DIR, "intrinsics.json")
+INTRINSICS_FILE = os.path.join(CALIBRATION_DIR, "D405_intrinsics.json")
 
 # 点云配置
 MAX_DEPTH_Head = 1.0  # 米
