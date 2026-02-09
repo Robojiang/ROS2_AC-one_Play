@@ -5,4 +5,4 @@ source /opt/miniconda3/etc/profile.d/conda.sh
 
 conda activate robotwin
 
-torchrun --nproc_per_node=4 --master_port=29501 train.py task=pick_place_d405
+torchrun --nproc_per_node=4 --master_port=29502 train.py --config-name ghost_keyframe_policy task=pick_place_d405 
