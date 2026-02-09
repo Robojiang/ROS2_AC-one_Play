@@ -143,3 +143,5 @@ datasets_zarr/*
 !datasets/.gitkeep
 *.zarr
 policy/GHOST/data/*
+policy/DP3/data/*
+policy/DP3/checkpoints/*
