@@ -131,7 +131,6 @@ qtcreator-*
 COLCON_IGNORE
 AMENT_IGNORE
 
-**/weights
 **/test
 data_points_test/
 calibration_data_ark/
@@ -145,3 +144,7 @@ datasets_zarr/*
 policy/GHOST/data/*
 policy/DP3/data/*
 policy/DP3/checkpoints/*
+
+act/datasets/*
+weights/*
+!weights/.gitkeep
