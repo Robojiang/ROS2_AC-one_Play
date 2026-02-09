@@ -393,7 +393,7 @@ def parse_arguments(known=False):
     parser.add_argument('--datasets', type=str, default=Path.joinpath(ROOT, 'datasets'),
                         help='dataset dir')
     parser.add_argument('--episode_idx', type=int, default=0, help='episode index')
-    parser.add_argument('--max_timesteps', type=int, default=8000, help='max timesteps')
+    parser.add_argument('--max_timesteps', type=int, default=3500, help='max timesteps')
     parser.add_argument('--frame_rate', type=int, default=60, help='frame rate')
 
     # 配置文件
