@@ -25,7 +25,6 @@ except ImportError:
     
 from diffusion_policy_3d.common.model_util import print_params
 from termcolor import cprint
-import transforms3d
 
 class GHOSTPolicy(BasePolicy):
     def __init__(self, 

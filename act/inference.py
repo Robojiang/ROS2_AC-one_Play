@@ -435,7 +435,7 @@ def ros_process(args, config, meta_queue, connected_event, start_event, shm_read
 
                 gripper_idx = [6, 13]
 
-                left_action = action[:gripper_idx[0] + 1]  # 取8维度
+                left_action = action[:gripper_idx[0] + 1]  # 取7维度
                 if gripper_gate != -1:
                     left_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
 
