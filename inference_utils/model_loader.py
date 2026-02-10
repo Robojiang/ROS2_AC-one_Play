@@ -12,6 +12,11 @@ dp3_path = os.path.join(os.path.dirname(__file__), '..', 'policy', 'DP3', '3D-Di
 if dp3_path not in sys.path:
     sys.path.insert(0, os.path.abspath(dp3_path))
 
+# 添加 GHOST 路径
+ghost_path = os.path.join(os.path.dirname(__file__), '..', 'policy', 'GHOST')
+if ghost_path not in sys.path:
+    sys.path.insert(0, os.path.abspath(ghost_path))
+
 
 class PolicyWrapper:
     """策略包装器基类，提供统一接口"""
@@ -70,24 +75,41 @@ class DP3Wrapper(PolicyWrapper):
 
 
 class GHOSTWrapper(PolicyWrapper):
-    """GHOST 策略包装器"""
+    """GHOST 策略包装器（支持 baseline/keyframe/beacon/beacon_key 变体）"""
     
     def __init__(self, model, config):
         super().__init__(model, config)
-        # TODO: 根据 GHOST 模型特性初始化
+        # GHOST 配置在顶层，不像 DP3 有 policy 子项
+        self.n_obs_steps = config.n_obs_steps
+        self.n_action_steps = config.n_action_steps
+        self.horizon = config.horizon
         
     def predict_action(self, obs_dict):
         """
-        预测动作序列 - GHOST 实现
+        预测动作序列
         
         Args:
             obs_dict: 包含点云和机器人状态
+                - 'point_cloud': (B, To, N, 6) torch.Tensor 点云序列（xyz+rgb）
+                - 'agent_pos': (B, To, D) torch.Tensor 机器人状态序列
         
         Returns:
-            actions: 动作序列
+            actions: (B, horizon, action_dim) numpy.ndarray 动作序列
         """
-        # TODO: 实现 GHOST 推理逻辑
-        raise NotImplementedError("GHOST inference not implemented yet")
+        with torch.no_grad():
+            # 将输入移动到正确的设备
+            obs_dict_device = {
+                k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                for k, v in obs_dict.items()
+            }
+            
+            # 构造 batch 格式（GHOST 的 get_action 需要 batch['obs']）
+            batch = {'obs': obs_dict_device}
+            
+            # 调用模型的 get_action 方法
+            actions = self.model.get_action(batch)  # (B, horizon, action_dim)
+            
+        return actions.cpu().numpy()
 
 
 def load_policy_model(policy_name, task_name, ckpt_name, root_dir="weights"):
@@ -190,9 +212,78 @@ def _load_dp3_model(checkpoint, config):
 
 
 def _load_ghost_model(checkpoint, config):
-    """加载 GHOST 模型"""
-    # TODO: 实现 GHOST 加载逻辑
-    raise NotImplementedError("GHOST model loading not implemented yet")
+    """加载 GHOST 模型 - 支持所有变体（baseline/keyframe/beacon/beacon_key）"""
+    from ghost_policy import GHOSTPolicy
+    from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+    
+    # 1. 创建 noise scheduler
+    noise_scheduler_config = config.policy.noise_scheduler
+    noise_scheduler = DDPMScheduler(
+        num_train_timesteps=noise_scheduler_config.num_train_timesteps,
+        beta_schedule=noise_scheduler_config.beta_schedule,
+        clip_sample=noise_scheduler_config.clip_sample,
+        prediction_type=noise_scheduler_config.prediction_type,
+    )
+    
+    # 2. 创建模型实例
+    # GHOST 可能有不同变体，但基础参数类似
+    model_kwargs = {
+        'shape_meta': config.policy.shape_meta,
+        'noise_scheduler': noise_scheduler,
+        'horizon': config.policy.horizon,
+        'n_action_steps': config.policy.n_action_steps,
+        'n_obs_steps': config.policy.n_obs_steps,
+        'num_inference_steps': config.policy.get('num_inference_steps', noise_scheduler_config.num_train_timesteps),
+        'obs_as_global_cond': config.policy.obs_as_global_cond,
+        'diffusion_step_embed_dim': config.policy.diffusion_step_embed_dim,
+        'down_dims': config.policy.down_dims,
+        'kernel_size': config.policy.kernel_size,
+        'n_groups': config.policy.n_groups,
+        'condition_type': config.policy.condition_type,
+        'use_pc_color': config.policy.use_pc_color,
+        'pointnet_type': config.policy.pointnet_type,
+        'pointcloud_encoder_cfg': config.policy.pointcloud_encoder_cfg,
+    }
+    
+    # GHOST 特有参数
+    if 'use_aux_points' in config.policy:
+        model_kwargs['use_aux_points'] = config.policy.use_aux_points
+    if 'aux_point_num' in config.policy:
+        model_kwargs['aux_point_num'] = config.policy.aux_point_num
+    if 'aux_length' in config.policy:
+        model_kwargs['aux_length'] = config.policy.aux_length
+    if 'aux_radius' in config.policy:
+        model_kwargs['aux_radius'] = config.policy.aux_radius
+    if 'aux_trident_side_len' in config.policy:
+        model_kwargs['aux_trident_side_len'] = config.policy.aux_trident_side_len
+    if 'aux_trident_max_width' in config.policy:
+        model_kwargs['aux_trident_max_width'] = config.policy.aux_trident_max_width
+    
+    model = GHOSTPolicy(**model_kwargs)
+    
+    # 3. 加载权重（优先使用 EMA 模型）
+    state_dicts = checkpoint.get('state_dicts', {})
+    
+    # 优先加载 EMA 模型（性能更好）
+    if 'ema_model' in state_dicts and state_dicts['ema_model'] is not None:
+        print("  Loading EMA model weights...")
+        model.load_state_dict(state_dicts['ema_model'])
+    elif 'model' in state_dicts:
+        print("  Loading standard model weights...")
+        model.load_state_dict(state_dicts['model'])
+    else:
+        raise ValueError("No model state_dict found in checkpoint")
+    
+    # 4. 设置为评估模式并移动到 GPU
+    model.eval()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    
+    print(f"  GHOST model loaded on {device}")
+    print(f"  Normalizer keys: {list(model.normalizer.params_dict.keys())}")
+    
+    # 5. 创建 wrapper
+    return GHOSTWrapper(model, config)
 
 
 def test_model_loading(policy_name="DP3", task_name="pick_place_d405", ckpt_name="latest.ckpt"):
@@ -231,6 +322,18 @@ def test_model_loading(policy_name="DP3", task_name="pick_place_d405", ckpt_name
             dummy_obs = {
                 'point_cloud': torch.randn(1, To, 512, 6),  # (B, To, N, 6)
                 'agent_pos': torch.randn(1, To, 14)  # (B, To, D)
+            }
+            
+            actions = policy_wrapper.predict_action(dummy_obs)
+            print(f"  Action shape: {actions.shape}")
+            print(f"  Action range: [{actions.min():.3f}, {actions.max():.3f}]")
+            
+        elif policy_name.upper() == 'GHOST':
+            # GHOST 使用类似格式，但 agent_pos 是 32D (VGC 格式)
+            To = policy_wrapper.n_obs_steps
+            dummy_obs = {
+                'point_cloud': torch.randn(1, To, 512, 6),  # (B, To, N, 6)
+                'agent_pos': torch.randn(1, To, 32)  # (B, To, 32) - VGC 格式
             }
             
             actions = policy_wrapper.predict_action(dummy_obs)
