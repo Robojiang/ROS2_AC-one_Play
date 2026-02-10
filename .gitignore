@@ -148,3 +148,5 @@ policy/DP3/checkpoints/*
 act/datasets/*
 weights/*
 !weights/.gitkeep
+
+policy/DP3/3D-Diffusion-Policy/diffusion_policy_3d.egg-info

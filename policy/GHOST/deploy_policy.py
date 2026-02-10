@@ -20,9 +20,6 @@ dp3_pkg_path = os.path.join(policy_dir, 'DP3', '3D-Diffusion-Policy')
 sys.path.append(dp3_pkg_path)
 sys.path.append(os.path.join(dp3_pkg_path, 'diffusion_policy_3d'))
 
-# Add VGC for dataset utils
-vgc_dir = os.path.join(policy_dir, 'VGC')
-sys.path.append(vgc_dir)
 
 # Add dataset directory to path (for ghost_keyframe_dataset)
 sys.path.append(os.path.join(ghost_dir, 'dataset'))

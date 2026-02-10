@@ -602,60 +602,60 @@ class RosOperator(Node):
         return action_dict
 
     def img_head_callback(self, msg):
-        if len(self.img_head_deque) >= 2000:
+        if len(self.img_head_deque) >= 200:
             self.img_head_deque.popleft()
         self.img_head_deque.append(msg)
 
     def img_left_callback(self, msg):
-        if len(self.img_left_deque) >= 2000:
+        if len(self.img_left_deque) >= 200:
             self.img_left_deque.popleft()
         self.img_left_deque.append(msg)
 
     def img_right_callback(self, msg):
-        if len(self.img_right_deque) >= 2000:
+        if len(self.img_right_deque) >= 200:
             self.img_right_deque.popleft()
         self.img_right_deque.append(msg)
 
     def img_head_depth_callback(self, msg):
-        if len(self.img_head_depth_deque) >= 2000:
+        if len(self.img_head_depth_deque) >= 200:
             self.img_head_depth_deque.popleft()
         self.img_head_depth_deque.append(msg)
         if len(self.img_head_depth_deque) == 1:
             self.get_logger().info(f"✅ 首次收到 head 深度图，尺寸: {msg.width}x{msg.height}")
 
     def img_left_depth_callback(self, msg):
-        if len(self.img_left_depth_deque) >= 2000:
+        if len(self.img_left_depth_deque) >= 200:
             self.img_left_depth_deque.popleft()
         self.img_left_depth_deque.append(msg)
         if len(self.img_left_depth_deque) == 1:
             self.get_logger().info(f"✅ 首次收到 left_wrist 深度图，尺寸: {msg.width}x{msg.height}")
 
     def img_right_depth_callback(self, msg):
-        if len(self.img_right_depth_deque) >= 2000:
+        if len(self.img_right_depth_deque) >= 200:
             self.img_right_depth_deque.popleft()
         self.img_right_depth_deque.append(msg)
         if len(self.img_right_depth_deque) == 1:
             self.get_logger().info(f"✅ 首次收到 right_wrist 深度图，尺寸: {msg.width}x{msg.height}")
 
     def controller_left_callback(self, msg):
-        if len(self.controller_left_deque) >= 2000:
+        if len(self.controller_left_deque) >= 200:
             self.controller_left_deque.popleft()
         self.controller_left_deque.append(msg)
         self.feedback_left_arm_deque.append(msg)
 
     def controller_right_callback(self, msg):
-        if len(self.controller_right_deque) >= 2000:
+        if len(self.controller_right_deque) >= 200:
             self.controller_right_deque.popleft()
         self.controller_right_deque.append(msg)
         self.feedback_right_arm_deque.append(msg)
 
     def feedback_left_callback(self, msg):
-        if len(self.feedback_left_arm_deque) >= 2000:
+        if len(self.feedback_left_arm_deque) >= 200:
             self.feedback_left_arm_deque.popleft()
         self.feedback_left_arm_deque.append(msg)
 
     def feedback_right_callback(self, msg):
-        if len(self.feedback_right_arm_deque) >= 2000:
+        if len(self.feedback_right_arm_deque) >= 200:
             self.feedback_right_arm_deque.popleft()
         self.feedback_right_arm_deque.append(msg)
 

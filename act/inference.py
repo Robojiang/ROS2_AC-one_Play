@@ -441,7 +441,7 @@ def ros_process(args, config, meta_queue, connected_event, start_event, shm_read
 
                 right_action = action[gripper_idx[0] + 1:gripper_idx[1] + 1]
                 if gripper_gate != -1:
-                    right_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
+                    right_action[gripper_idx[0]] = apply_gripper_gate(right_action[gripper_idx[0]], gripper_gate)
 
                 ros_operator.follow_arm_publish(left_action, right_action)
 
