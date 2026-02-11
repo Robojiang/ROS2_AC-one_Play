@@ -742,7 +742,7 @@ def convert_all_tasks(max_episodes=None, task_filter=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="将HDF5数据集转换为Zarr格式 (含点云生成)")
-    parser.add_argument("--max_episodes", type=int, default=1, help="每个任务最多转换多少个episodes (None表示全部)")
+    parser.add_argument("--max_episodes", type=int, default=None, help="每个任务最多转换多少个episodes (None表示全部)")
     parser.add_argument("--task", type=str, default=None, help="指定要转换的任务名称 (默认转换所有任务)")
     
     args = parser.parse_args()
