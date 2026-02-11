@@ -1,5 +1,38 @@
 """
-统一模型加载器 - 支持 DP3 和 GHOST，normalizer 已集成在模型中
+统一模型加载器 - 支持 DP3 和 GHOST（所有变体），normalizer 已集成在模型中
+
+功能特性：
+1. ✅ 统一接口：load_policy_model(policy_name, task_name, ckpt_name)
+2. ✅ DP3 支持：完整的 Diffusion Policy 3D 加载
+3. ✅ GHOST 支持：所有变体（baseline/keyframe/beacon/beacon_key）
+4. ✅ Normalizer：自动从 checkpoint 加载（集成在模型 state_dict 中）
+5. ✅ EMA 模型：优先加载 EMA 权重以获得更好性能
+6. ✅ 配置自包含：所有配置从 checkpoint['cfg'] 读取，无需外部 yaml
+
+使用示例：
+    # 加载 DP3
+    policy = load_policy_model('DP3', 'pick_place_d405', '750.ckpt')
+    
+    # 加载 GHOST
+    policy = load_policy_model('GHOST', 'pick_place_d405', 'latest.ckpt')
+    
+    # 推理
+    actions = policy.predict_action({
+        'point_cloud': torch.randn(1, 2, 512, 6),  # (B, To, N, 6)
+        'agent_pos': torch.randn(1, 2, 14)  # DP3: 14D, GHOST: 32D
+    })
+    
+测试：
+    python inference_utils/model_loader.py DP3 pick_place_d405 750.ckpt
+    python inference_utils/model_loader.py GHOST pick_place_d405 latest.ckpt
+
+关于配置文件：
+    ✅ checkpoint 中已包含完整配置（cfg）
+    ✅ checkpoint 中已包含 normalizer（state_dict）
+    ❌ 不需要重新加载 yaml 配置文件
+    
+    保存时：checkpoint = {'cfg': cfg, 'state_dicts': {...}}
+    加载时：config = checkpoint['cfg']  # 直接使用
 """
 import os
 import sys
@@ -79,10 +112,10 @@ class GHOSTWrapper(PolicyWrapper):
     
     def __init__(self, model, config):
         super().__init__(model, config)
-        # GHOST 配置在顶层，不像 DP3 有 policy 子项
-        self.n_obs_steps = config.n_obs_steps
-        self.n_action_steps = config.n_action_steps
-        self.horizon = config.horizon
+        # GHOST 配置结构：n_obs_steps 等参数在 policy 下
+        self.n_obs_steps = config.policy.n_obs_steps
+        self.n_action_steps = config.policy.n_action_steps
+        self.horizon = config.policy.horizon
         
     def predict_action(self, obs_dict):
         """
@@ -215,6 +248,7 @@ def _load_ghost_model(checkpoint, config):
     """加载 GHOST 模型 - 支持所有变体（baseline/keyframe/beacon/beacon_key）"""
     from ghost_policy import GHOSTPolicy
     from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+    from omegaconf import OmegaConf
     
     # 1. 创建 noise scheduler
     noise_scheduler_config = config.policy.noise_scheduler
@@ -226,9 +260,9 @@ def _load_ghost_model(checkpoint, config):
     )
     
     # 2. 创建模型实例
-    # GHOST 可能有不同变体，但基础参数类似
+    # 将 OmegaConf 转换为普通字典以避免 struct mode 限制
     model_kwargs = {
-        'shape_meta': config.policy.shape_meta,
+        'shape_meta': OmegaConf.to_container(config.policy.shape_meta, resolve=True),
         'noise_scheduler': noise_scheduler,
         'horizon': config.policy.horizon,
         'n_action_steps': config.policy.n_action_steps,
@@ -236,13 +270,13 @@ def _load_ghost_model(checkpoint, config):
         'num_inference_steps': config.policy.get('num_inference_steps', noise_scheduler_config.num_train_timesteps),
         'obs_as_global_cond': config.policy.obs_as_global_cond,
         'diffusion_step_embed_dim': config.policy.diffusion_step_embed_dim,
-        'down_dims': config.policy.down_dims,
+        'down_dims': list(config.policy.down_dims),  # 转换为 list
         'kernel_size': config.policy.kernel_size,
         'n_groups': config.policy.n_groups,
         'condition_type': config.policy.condition_type,
         'use_pc_color': config.policy.use_pc_color,
         'pointnet_type': config.policy.pointnet_type,
-        'pointcloud_encoder_cfg': config.policy.pointcloud_encoder_cfg,
+        'pointcloud_encoder_cfg': OmegaConf.to_container(config.policy.pointcloud_encoder_cfg, resolve=True) if config.policy.pointcloud_encoder_cfg else {},
     }
     
     # GHOST 特有参数
@@ -370,8 +404,11 @@ if __name__ == "__main__":
         task_name = sys.argv[2] if len(sys.argv) > 2 else "pick_place_d405"
         ckpt_name = sys.argv[3] if len(sys.argv) > 3 else "750.ckpt"
     else:
-        policy_name = "DP3"
+        # policy_name = "DP3"
+        # task_name = "pick_place_d405"
+        # ckpt_name = "750.ckpt"
+        policy_name = "GHOST"
         task_name = "pick_place_d405"
-        ckpt_name = "750.ckpt"
+        ckpt_name = "latest.ckpt"
     
     test_model_loading(policy_name, task_name, ckpt_name)

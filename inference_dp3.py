@@ -38,7 +38,8 @@ from act.utils.ros_operator import RosOperator, Rate
 from act.utils.setup_loader import setup_loader
 
 # 导入推理工具
-from inference_utils import PointCloudGenerator, load_policy_model, ObservationManager
+from inference_utils.pointcloud_generator import PointCloudGenerator
+from inference_utils.model_loader import load_policy_model
 from inference_utils.calibration import load_calibration_data
 
 np.set_printoptions(linewidth=200, suppress=True)
@@ -309,25 +310,29 @@ def ros_process(args, meta_queue, connected_event, start_event, shm_ready_event)
 
 
 def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
-    """推理进程 - DP3专用"""
+    """推理进程 - 使用统一模型加载器"""
     print("[INFO] 推理进程启动")
     
-    # 加载策略（使用inference_utils）
-    from types import SimpleNamespace
-    load_args = SimpleNamespace(
-        policy=args.policy,
+    # 1. 加载策略（使用新的 model_loader）
+    policy = load_policy_model(
+        policy_name=args.policy,
         task_name=args.task_name,
-        ckpt_name=args.ckpt_name
+        ckpt_name=args.ckpt_name or 'latest.ckpt',
+        root_dir=str(ROOT / 'weights')
     )
-    policy, config = load_policy_model(load_args, ROOT)
     
-    # 创建工具
+    n_obs_steps = policy.n_obs_steps
+    n_action_steps = policy.n_action_steps
+    
+    print(f"[INFO] 模型加载完成: n_obs_steps={n_obs_steps}, n_action_steps={n_action_steps}")
+    
+    # 2. 创建点云生成器
     pc_generator = PointCloudGenerator()
-    obs_manager = ObservationManager(
-        policy_type=args.policy,
-        n_obs_steps=config.n_obs_steps,
-        n_action_steps=config.n_action_steps
-    )
+    
+    # 3. 观测缓存 - 用于构建历史观测
+    obs_buffer = []  # 存储 (point_cloud, agent_pos) 元组
+    action_queue = []  # 动作队列
+    action_index = 0  # 当前执行到第几个动作
     
     step_count = 0
     print(f"[INFO] 开始推理循环 (max_steps={args.max_publish_step})")
@@ -372,27 +377,54 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                 T_LB_H=calibration_data['T_LB_H']
             )
             
-            # 添加观测
-            obs_manager.add_observation(obs_dict, point_cloud)
+            # 准备 agent_pos (14D for DP3, 32D for GHOST)
+            agent_pos = obs_dict['qpos']  # (14,)
             
-            if not obs_manager.is_ready_for_inference():
-                time.sleep(0.01)
-                continue
+            # 添加到观测缓存
+            obs_buffer.append((point_cloud, agent_pos))
+            if len(obs_buffer) > n_obs_steps:
+                obs_buffer.pop(0)
             
-            # 推理
-            if not obs_manager.has_actions():
-                batch = obs_manager.prepare_dp3_batch()
-                with torch.no_grad():
-                    actions = policy.get_action(batch)
-                actions = actions[0].cpu().numpy()
-                obs_manager.add_actions(actions)
+            # 如果缓存不足，用最新观测填充
+            while len(obs_buffer) < n_obs_steps:
+                obs_buffer.insert(0, obs_buffer[0])
             
-            # 获取动作
-            action = obs_manager.get_next_action()
-            if action is not None:
+            # 检查是否需要推理新动作
+            if action_index >= len(action_queue):
+                # 构建模型输入：(B=1, To, N, 6) 和 (B=1, To, D)
+                point_clouds = []
+                agent_poses = []
+                
+                for pc, ap in obs_buffer[-n_obs_steps:]:
+                    point_clouds.append(pc)  # (N, 6)
+                    agent_poses.append(ap)   # (D,)
+                
+                # 堆叠并转换为 torch tensor
+                point_cloud_batch = torch.from_numpy(np.stack(point_clouds)).float().unsqueeze(0)  # (1, To, N, 6)
+                agent_pos_batch = torch.from_numpy(np.stack(agent_poses)).float().unsqueeze(0)      # (1, To, D)
+                
+                model_input = {
+                    'point_cloud': point_cloud_batch,
+                    'agent_pos': agent_pos_batch
+                }
+                
+                # 推理
+                actions = policy.predict_action(model_input)  # (1, horizon, action_dim)
+                action_queue = actions[0]  # (horizon, action_dim)
+                action_index = 0
+                
+                if args.debug and step_count % 30 == 0:
+                    print(f"[DEBUG] 新推理: action_queue.shape={action_queue.shape}")
+            
+            # 获取当前动作
+            if action_index < len(action_queue):
+                action = action_queue[action_index]
+                action_index += 1
+                
                 if args.debug:
                     if step_count % 30 == 0:
-                        print(f"[DEBUG] Step {step_count}: Left={action[:7]}, Right={action[7:14]}")
+                        print(f"[DEBUG] Step {step_count}: action_index={action_index}/{len(action_queue)}")
+                        print(f"         Left={action[:7]}, Right={action[7:14]}")
                 else:
                     # 写入共享内存
                     shm, shape, dtype = shm_dict["action"]
@@ -418,9 +450,9 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--policy', type=str, default='DP3')
+    parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST'])
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
-    parser.add_argument('--ckpt_name', type=str, default=None)
+    parser.add_argument('--ckpt_name', type=str, default='750.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--max_publish_step', type=int, default=1000)
     parser.add_argument('--frame_rate', type=int, default=15)
@@ -436,10 +468,12 @@ def main():
     args = parse_args()
     
     print("="*80)
-    print("DP3推理脚本 (基于原始多进程架构)")
+    print(f"{args.policy} 推理脚本 (基于原始多进程架构)")
+    print(f"策略: {args.policy}")
     print(f"任务: {args.task_name}")
+    print(f"权重: {args.ckpt_name}")
     if args.debug:
-        print("⚠️  DEBUG MODE ⚠️")
+        print("⚠️  DEBUG MODE - 不执行动作 ⚠️")
     print("="*80)
     
     # 加载标定数据

@@ -152,10 +152,10 @@ def collect_information(args, ros_operator, voice_engine):
         action_velocity = obs_dict['base_velocity']
 
         # 夹爪动作处理
-        for idx in gripper_idx:
-            action[idx] = 0 if action[idx] > gripper_close else action[idx]
-        action_eef[6] = 0 if action_eef[6] > gripper_close else action_eef[6]
-        action_eef[13] = 0 if action_eef[13] > gripper_close else action_eef[13]
+        # for idx in gripper_idx:
+        #     action[idx] = 0 if action[idx] > gripper_close else action[idx]
+        # action_eef[6] = 0 if action_eef[6] > gripper_close else action_eef[6]
+        # action_eef[13] = 0 if action_eef[13] > gripper_close else action_eef[13]
 
         # 检查是否超过100帧，并判断是否应该停止
         if count > 100:

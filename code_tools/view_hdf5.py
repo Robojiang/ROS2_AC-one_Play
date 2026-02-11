@@ -36,12 +36,13 @@ def read_gripper_data(hdf5_path):
         print(f"   可用的观测数据: {list(f['observations'].keys())}")
         
         # 读取end-effector数据或qpos数据
-        if 'eef' in f['observations']:
-            data = f['observations/eef'][()]  # (T, 14)
-            data_type = "eef (末端姿态)"
-        elif 'qpos' in f['observations']:
+        
+        if 'qpos' in f['observations']:
             data = f['observations/qpos'][()]  # (T, 14)
             data_type = "qpos (关节角度)"
+        elif 'eef' in f['observations']:
+            data = f['observations/eef'][()]  # (T, 14)
+            data_type = "eef (末端姿态)"
         else:
             raise ValueError("❌ HDF5文件中未找到 'eef' 或 'qpos' 数据")
         
