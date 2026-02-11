@@ -17,6 +17,8 @@ import shutil
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
 import open3d as o3d
+import torch
+import torch.nn.functional as F
 
 # ================= 配置 =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +31,13 @@ INTRINSICS_FILE = os.path.join(CALIBRATION_DIR, "D405_intrinsics.json")
 # 点云配置
 MAX_DEPTH_Head = 1.0  # 米
 MAX_DEPTH_Hand = 0.6  # 米
-FPS_SAMPLE_POINTS = 1024  # 点云采样点数
+FPS_SAMPLE_POINTS = 2048  # 点云采样点数
+USE_RANDOM_SAMPLING = True  # True: 随机采样(快), False: FPS采样(慢但均匀)
+
+# ⚡ GPU加速配置
+USE_GPU = torch.cuda.is_available()
+DEVICE = torch.device('cuda' if USE_GPU else 'cpu')
+DOWNSAMPLE_SIZE = (160, 120)  # 从640x480降采样到160x120 (16倍降采样)
 
 # 工作空间裁剪 (相对于左臂基座坐标系)
 USE_WORKSPACE_CROP = True
@@ -40,6 +48,249 @@ WORKSPACE_Z_RANGE = [-0.2, 1.0]
 # 关键帧检测
 GRIPPER_DELTA = 0.05  # 夹爪变化阈值
 MIN_INTERVAL = 20  # 最小关键帧间隔
+
+print(f"⚡ GPU加速: {'启用' if USE_GPU else '禁用 (使用CPU)'}")
+if USE_GPU:
+    print(f"   设备: {torch.cuda.get_device_name(0)}")
+    print(f"   降采样尺寸: {DOWNSAMPLE_SIZE[0]}x{DOWNSAMPLE_SIZE[1]} (原始: 640x480)")
+print(f"   采样方式: {'随机采样 (快速)' if USE_RANDOM_SAMPLING else 'FPS采样 (慢但均匀)'}")
+
+
+# ================= GPU加速点云生成器 =================
+
+class GPUPointCloudGenerator:
+    """
+    GPU加速点云生成器
+    核心优化:
+    1. 预计算投影矩阵 (u-cx)/fx, (v-cy)/fy
+    2. 先降采样图像再生成点云 (160x120 vs 640x480)
+    3. 全流程在GPU上用PyTorch完成
+    """
+    
+    def __init__(self, intrinsics, downsample_size=(160, 120), device='cuda'):
+        """
+        Args:
+            intrinsics: dict with keys 'head', 'left', 'right', each containing (fx, fy, cx, cy)
+            downsample_size: (width, height) for downsampling
+            device: 'cuda' or 'cpu'
+        """
+        self.device = torch.device(device)
+        self.downsample_size = downsample_size
+        self.w, self.h = downsample_size
+        
+        # 预计算每个相机的射线方向矩阵
+        self.ray_dirs = {}
+        for cam_name, (fx, fy, cx, cy) in intrinsics.items():
+            # 调整内参到降采样分辨率
+            # 假设原始分辨率是 640x480
+            scale_x = self.w / 640.0
+            scale_y = self.h / 480.0
+            fx_scaled = fx * scale_x
+            fy_scaled = fy * scale_y
+            cx_scaled = cx * scale_x
+            cy_scaled = cy * scale_y
+            
+            # 生成像素坐标网格
+            u, v = torch.meshgrid(
+                torch.arange(self.w, device=self.device, dtype=torch.float32),
+                torch.arange(self.h, device=self.device, dtype=torch.float32),
+                indexing='xy'
+            )
+            
+            # 计算射线方向 (预计算)
+            x_over_z = (u - cx_scaled) / fx_scaled  # (H, W)
+            y_over_z = (v - cy_scaled) / fy_scaled
+            
+            self.ray_dirs[cam_name] = (x_over_z, y_over_z)
+        
+        print(f"[GPU点云生成器] 初始化完成 - 设备: {self.device}, 降采样: {self.w}x{self.h}")
+    
+    def depth_to_pointcloud(self, depth_img, color_img, cam_name, max_depth=None):
+        """
+        将深度图和彩色图转换为点云 (GPU版本)
+        
+        Args:
+            depth_img: (H, W) numpy array, uint16, mm
+            color_img: (H, W, 3) numpy array, uint8, RGB
+            cam_name: 'head', 'left', 'right'
+            max_depth: 最大深度(米)
+        
+        Returns:
+            point_cloud: (N, 6) torch tensor on device, [x, y, z, r, g, b]
+        """
+        # 1. 降采样
+        depth_small = cv2.resize(depth_img, self.downsample_size, interpolation=cv2.INTER_NEAREST)
+        color_small = cv2.resize(color_img, self.downsample_size, interpolation=cv2.INTER_LINEAR)
+        
+        # 2. 转换为torch tensor并移到GPU
+        depth_t = torch.from_numpy(depth_small).to(self.device).float() / 1000.0  # mm -> m
+        color_t = torch.from_numpy(color_small).to(self.device).float() / 255.0   # [0, 255] -> [0, 1]
+        
+        # 3. 有效性掩码
+        valid = depth_t > 0
+        if max_depth is not None:
+            valid = valid & (depth_t < max_depth)
+        
+        # 4. 使用预计算的射线方向
+        x_over_z, y_over_z = self.ray_dirs[cam_name]
+        
+        # 5. 计算3D坐标
+        z = depth_t  # (H, W)
+        x = x_over_z * z
+        y = y_over_z * z
+        
+        # 6. 展平并过滤有效点
+        x_flat = x[valid]  # (N,)
+        y_flat = y[valid]
+        z_flat = z[valid]
+        
+        # 从RGB图像提取颜色 (先分离通道再应用掩码)
+        r_flat = color_t[:, :, 0][valid]  # (N,)
+        g_flat = color_t[:, :, 1][valid]
+        b_flat = color_t[:, :, 2][valid]
+        
+        # 7. 拼接为 (N, 6)
+        xyz = torch.stack([x_flat, y_flat, z_flat], dim=1)  # (N, 3)
+        rgb = torch.stack([r_flat, g_flat, b_flat], dim=1)  # (N, 3)
+        
+        return torch.cat([xyz, rgb], dim=1)  # (N, 6)
+    
+    def transform_pointcloud(self, cloud, T):
+        """
+        变换点云 (GPU版本)
+        
+        Args:
+            cloud: (N, 6) tensor, [x, y, z, r, g, b]
+            T: (4, 4) numpy array, transformation matrix
+        
+        Returns:
+            transformed_cloud: (N, 6) tensor
+        """
+        T_t = torch.from_numpy(T).to(self.device).float()
+        
+        xyz = cloud[:, :3]  # (N, 3)
+        rgb = cloud[:, 3:]  # (N, 3)
+        
+        # 齐次坐标
+        ones = torch.ones((xyz.shape[0], 1), device=self.device)
+        xyz_homo = torch.cat([xyz, ones], dim=1)  # (N, 4)
+        
+        # 变换
+        xyz_trans = (T_t @ xyz_homo.T).T  # (N, 4)
+        
+        return torch.cat([xyz_trans[:, :3], rgb], dim=1)  # (N, 6)
+    
+    def crop_pointcloud(self, cloud, x_range, y_range, z_range):
+        """
+        裁剪点云 (GPU版本)
+        
+        Args:
+            cloud: (N, 6) tensor
+            x/y/z_range: [min, max]
+        
+        Returns:
+            cropped_cloud: (M, 6) tensor
+        """
+        xyz = cloud[:, :3]
+        mask = (
+            (xyz[:, 0] >= x_range[0]) & (xyz[:, 0] <= x_range[1]) &
+            (xyz[:, 1] >= y_range[0]) & (xyz[:, 1] <= y_range[1]) &
+            (xyz[:, 2] >= z_range[0]) & (xyz[:, 2] <= z_range[1])
+        )
+        return cloud[mask]
+    
+    def generate_frame(self, head_depth, head_color, left_depth, left_color,
+                      right_depth, right_color, left_eef, right_eef,
+                      T_H_LB, T_H_RB, T_LE_LC, T_RE_RC, T_LB_H,
+                      max_depth_head, max_depth_hand,
+                      use_workspace_crop=True,
+                      workspace_x_range=None, workspace_y_range=None, workspace_z_range=None):
+        """
+        生成单帧点云 (GPU加速版本)
+        
+        Returns:
+            point_cloud: (FPS_SAMPLE_POINTS, 6) numpy array
+        """
+        clouds = []
+        
+        # 1. Head Camera
+        pc_head = self.depth_to_pointcloud(head_depth, head_color, 'head', max_depth=max_depth_head)
+        if len(pc_head) > 0:
+            clouds.append(pc_head)
+        
+        # 2. Left Wrist Camera
+        pc_left = self.depth_to_pointcloud(left_depth, left_color, 'left', max_depth=max_depth_hand)
+        if len(pc_left) > 0:
+            T_LB_LE = eef_to_matrix(left_eef)
+            T_total_left = T_H_LB @ T_LB_LE @ T_LE_LC
+            pc_left = self.transform_pointcloud(pc_left, T_total_left)
+            clouds.append(pc_left)
+        
+        # 3. Right Wrist Camera
+        pc_right = self.depth_to_pointcloud(right_depth, right_color, 'right', max_depth=max_depth_hand)
+        if len(pc_right) > 0:
+            T_RB_RE = eef_to_matrix(right_eef)
+            T_total_right = T_H_RB @ T_RB_RE @ T_RE_RC
+            pc_right = self.transform_pointcloud(pc_right, T_total_right)
+            clouds.append(pc_right)
+        
+        if len(clouds) == 0:
+            return np.zeros((FPS_SAMPLE_POINTS, 6), dtype=np.float32)
+        
+        # 4. 合并并转换到左臂基座坐标系
+        merged = torch.cat(clouds, dim=0)
+        merged = self.transform_pointcloud(merged, T_LB_H)
+        
+        # 5. 工作空间裁剪
+        if use_workspace_crop:
+            merged = self.crop_pointcloud(merged, workspace_x_range, workspace_y_range, workspace_z_range)
+        
+        if len(merged) == 0:
+            return np.zeros((FPS_SAMPLE_POINTS, 6), dtype=np.float32)
+        
+        # 6. 转回CPU进行Open3D下采样 (FPS在GPU上实现复杂,用CPU也够快)
+        merged_cpu = merged.cpu().numpy()
+        
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(merged_cpu[:, :3])
+        pcd.colors = o3d.utility.Vector3dVector(merged_cpu[:, 3:])
+        
+        # 去噪
+        pcd_clean, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+        
+        # 体素下采样
+        pcd_voxel = pcd_clean.voxel_down_sample(voxel_size=0.005)
+        
+        # 最终采样到固定点数
+        if USE_RANDOM_SAMPLING:
+            # 随机采样 (快速)
+            pts = np.asarray(pcd_voxel.points)
+            clrs = np.asarray(pcd_voxel.colors)
+            
+            if len(pts) > FPS_SAMPLE_POINTS:
+                # 随机选择索引
+                indices = np.random.choice(len(pts), FPS_SAMPLE_POINTS, replace=False)
+                pts = pts[indices]
+                clrs = clrs[indices]
+            
+            result = np.hstack((pts, clrs)).astype(np.float32)
+        else:
+            # FPS采样 (慢但均匀)
+            if len(pcd_voxel.points) > FPS_SAMPLE_POINTS:
+                pcd_fps = pcd_voxel.farthest_point_down_sample(FPS_SAMPLE_POINTS)
+            else:
+                pcd_fps = pcd_voxel
+            
+            pts = np.asarray(pcd_fps.points)
+            clrs = np.asarray(pcd_fps.colors)
+            result = np.hstack((pts, clrs)).astype(np.float32)
+        
+        # Pad到固定大小
+        if len(result) < FPS_SAMPLE_POINTS:
+            padding = np.zeros((FPS_SAMPLE_POINTS - len(result), 6), dtype=np.float32)
+            result = np.vstack((result, padding))
+        
+        return result
 
 # ================= 标定加载函数 =================
 
@@ -73,139 +324,6 @@ def eef_to_matrix(eef_pose):
     T[:3, :3] = r
     T[:3, 3] = t
     return T
-
-def depth_to_point_cloud(depth_img, color_img, fx, fy, cx, cy, max_depth=None):
-    """将深度图和彩色图转换为点云"""
-    h, w = depth_img.shape
-    u, v = np.meshgrid(np.arange(w), np.arange(h))
-    
-    valid = depth_img > 0
-    if max_depth is not None:
-        valid = valid & (depth_img < max_depth * 1000)
-    
-    z = depth_img[valid].astype(np.float32) / 1000.0
-    u = u[valid]
-    v = v[valid]
-    
-    x = (u - cx) * z / fx
-    y = (v - cy) * z / fy
-    
-    b = color_img[valid, 0].astype(np.float32) / 255.0
-    g = color_img[valid, 1].astype(np.float32) / 255.0
-    r = color_img[valid, 2].astype(np.float32) / 255.0
-    
-    xyz = np.stack((x, y, z), axis=1)
-    rgb = np.stack((r, g, b), axis=1)
-    
-    return np.hstack((xyz, rgb))
-
-def transform_point_cloud(cloud, T):
-    """变换点云"""
-    xyz = cloud[:, :3]
-    rgb = cloud[:, 3:]
-    
-    ones = np.ones((xyz.shape[0], 1))
-    xyz_homo = np.hstack((xyz, ones))
-    xyz_trans = (T @ xyz_homo.T).T
-    
-    return np.hstack((xyz_trans[:, :3], rgb))
-
-def crop_point_cloud(cloud_np, x_range, y_range, z_range):
-    """裁剪点云"""
-    xyz = cloud_np[:, :3]
-    mask = (
-        (xyz[:, 0] >= x_range[0]) & (xyz[:, 0] <= x_range[1]) &
-        (xyz[:, 1] >= y_range[0]) & (xyz[:, 1] <= y_range[1]) &
-        (xyz[:, 2] >= z_range[0]) & (xyz[:, 2] <= z_range[1])
-    )
-    return cloud_np[mask]
-
-def numpy_to_o3d(cloud_np):
-    """转换numpy数组到open3d点云"""
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(cloud_np[:, :3])
-    pcd.colors = o3d.utility.Vector3dVector(cloud_np[:, 3:])
-    return pcd
-
-def generate_point_cloud_single_frame(head_depth, head_color, left_depth, left_color, 
-                                     right_depth, right_color, left_eef, right_eef,
-                                     intrinsics, T_H_LB, T_H_RB, T_LE_LC, T_RE_RC,
-                                     T_LB_H):
-    """
-    生成单帧点云 (在左臂基座坐标系下)
-    返回: (N, 6) numpy array, N <= FPS_SAMPLE_POINTS
-    """
-    clouds_global = []
-    
-    # 1. Head Camera
-    fx, fy, cx, cy = intrinsics['head']
-    pc_head = depth_to_point_cloud(head_depth, head_color, fx, fy, cx, cy, max_depth=MAX_DEPTH_Head)
-    if len(pc_head) > 0:
-        clouds_global.append(pc_head)
-    
-    # 2. Left Wrist Camera
-    fx, fy, cx, cy = intrinsics['left']
-    pc_left = depth_to_point_cloud(left_depth, left_color, fx, fy, cx, cy, max_depth=MAX_DEPTH_Hand)
-    if len(pc_left) > 0:
-        T_LB_LE = eef_to_matrix(left_eef)
-        T_total_left = T_H_LB @ T_LB_LE @ T_LE_LC
-        pc_left_global = transform_point_cloud(pc_left, T_total_left)
-        clouds_global.append(pc_left_global)
-    
-    # 3. Right Wrist Camera
-    fx, fy, cx, cy = intrinsics['right']
-    pc_right = depth_to_point_cloud(right_depth, right_color, fx, fy, cx, cy, max_depth=MAX_DEPTH_Hand)
-    if len(pc_right) > 0:
-        T_RB_RE = eef_to_matrix(right_eef)
-        # 变换路径: Cam -> End -> Base -> HeadCam
-        # P_Head = T_H_RB @ T_RB_RE @ T_RE_RC @ P_Cam
-        T_total_right = T_H_RB @ T_RB_RE @ T_RE_RC
-        pc_right_global = transform_point_cloud(pc_right, T_total_right)
-        clouds_global.append(pc_right_global)
-    
-    if len(clouds_global) == 0:
-        # 返回空点云
-        return np.zeros((FPS_SAMPLE_POINTS, 6), dtype=np.float32)
-    
-    # 4. 合并并转换到左臂基座坐标系
-    # 注意: T_LB_H实际就是Head->LeftBase, 和pointcloud_from_hdf5.py中用法一致
-    merged_cloud = np.vstack(clouds_global)
-    merged_cloud = transform_point_cloud(merged_cloud, T_LB_H)
-    
-    # 5. 工作空间裁剪
-    if USE_WORKSPACE_CROP:
-        merged_cloud = crop_point_cloud(merged_cloud, WORKSPACE_X_RANGE, 
-                                       WORKSPACE_Y_RANGE, WORKSPACE_Z_RANGE)
-    
-    if len(merged_cloud) == 0:
-        return np.zeros((FPS_SAMPLE_POINTS, 6), dtype=np.float32)
-    
-    # 6. 下采样
-    pcd = numpy_to_o3d(merged_cloud)
-    
-    # 去噪
-    pcd_clean, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-    
-    # 体素下采样
-    pcd_voxel = pcd_clean.voxel_down_sample(voxel_size=0.005)
-    
-    # FPS采样
-    if len(pcd_voxel.points) > FPS_SAMPLE_POINTS:
-        pcd_fps = pcd_voxel.farthest_point_down_sample(FPS_SAMPLE_POINTS)
-    else:
-        pcd_fps = pcd_voxel
-    
-    # 转换回numpy
-    pts = np.asarray(pcd_fps.points)
-    clrs = np.asarray(pcd_fps.colors)
-    result = np.hstack((pts, clrs)).astype(np.float32)
-    
-    # Pad到固定大小
-    if len(result) < FPS_SAMPLE_POINTS:
-        padding = np.zeros((FPS_SAMPLE_POINTS - len(result), 6), dtype=np.float32)
-        result = np.vstack((result, padding))
-    
-    return result
 
 # ================= HDF5数据读取 =================
 
@@ -374,6 +492,13 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
     }
     print("✅ 标定文件加载完成")
     
+    # ⚡ 初始化GPU点云生成器
+    pc_generator = GPUPointCloudGenerator(
+        intrinsics=intrinsics,
+        downsample_size=DOWNSAMPLE_SIZE,
+        device=DEVICE
+    )
+    
     # 初始化Zarr数据集
     compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=1)
     zarr_datasets = {}
@@ -415,12 +540,26 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
             point_clouds = []
             print(f"\n  📊 {hdf5_filename}: 生成 {T} 帧点云...")
             for t in tqdm(range(T), desc=f"  Processing frames", leave=False, ncols=80):
-                pc = generate_point_cloud_single_frame(
-                    data['head_depths'][t], data['head_images'][t],
-                    data['left_depths'][t], data['left_images'][t],
-                    data['right_depths'][t], data['right_images'][t],
-                    left_eef[t], right_eef[t],
-                    intrinsics, T_H_LB, T_H_RB, T_LE_LC, T_RE_RC, T_LB_H
+                pc = pc_generator.generate_frame(
+                    head_depth=data['head_depths'][t],
+                    head_color=data['head_images'][t],
+                    left_depth=data['left_depths'][t],
+                    left_color=data['left_images'][t],
+                    right_depth=data['right_depths'][t],
+                    right_color=data['right_images'][t],
+                    left_eef=left_eef[t],
+                    right_eef=right_eef[t],
+                    T_H_LB=T_H_LB,
+                    T_H_RB=T_H_RB,
+                    T_LE_LC=T_LE_LC,
+                    T_RE_RC=T_RE_RC,
+                    T_LB_H=T_LB_H,
+                    max_depth_head=MAX_DEPTH_Head,
+                    max_depth_hand=MAX_DEPTH_Hand,
+                    use_workspace_crop=USE_WORKSPACE_CROP,
+                    workspace_x_range=WORKSPACE_X_RANGE,
+                    workspace_y_range=WORKSPACE_Y_RANGE,
+                    workspace_z_range=WORKSPACE_Z_RANGE
                 )
                 point_clouds.append(pc)
             

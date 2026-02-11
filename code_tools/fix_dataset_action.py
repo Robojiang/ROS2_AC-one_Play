@@ -76,23 +76,18 @@ def fix_action_with_temporal_shift(input_path, output_path):
         print(f"   右夹爪 (qpos)    - 范围: [{right_gripper_obs.min():.3f}, {right_gripper_obs.max():.3f}]")
         
         # ========== ✅ 核心修复：时间偏移 ==========
-        # action[t] = qpos[t+1]（下一时刻的位置作为当前时刻的目标）
         new_action = np.zeros_like(old_action)
         new_action_eef = np.zeros_like(old_action_eef)
         new_action_base = np.zeros_like(old_action_base)
         new_action_velocity = np.zeros_like(old_action_velocity)
         
         # 对于前 T-1 帧：action[t] = qpos[t+1]
-        new_action[:-1] = qpos[1:]
-        new_action_eef[:-1] = eef[1:]
-        new_action_base[:-1] = robot_base[1:]
-        new_action_velocity[:-1] = base_velocity[1:]
+        new_action[:] = qpos[:]
+        new_action_eef[:] = eef[:]
+        new_action_base[:] = robot_base[:]
+        new_action_velocity[:] = base_velocity[:]
         
-        # 对于最后一帧：保持不变（action[T-1] = qpos[T-1]）
-        new_action[-1] = qpos[-1]
-        new_action_eef[-1] = eef[-1]
-        new_action_base[-1] = robot_base[-1]
-        new_action_velocity[-1] = base_velocity[-1]
+       
         
         # 分析新 action 的夹爪值
         left_gripper_new = new_action[:, 6]
