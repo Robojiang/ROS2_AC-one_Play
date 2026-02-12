@@ -29,7 +29,7 @@ from convert_hdf5_to_zarr import (
 # 配置
 CALIBRATION_DIR = os.path.join(BASE_DIR, "calibration_results")
 DATASETS_DIR = os.path.join(BASE_DIR, "datasets")
-TEST_EPISODE = os.path.join(DATASETS_DIR, "pick_place_d405/episode_10.hdf5")
+TEST_EPISODE = os.path.join(DATASETS_DIR, "episode_0.hdf5")
 NUM_FRAMES_TEST = 50  # 测试50帧
 
 def load_test_data():

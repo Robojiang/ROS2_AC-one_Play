@@ -457,7 +457,7 @@ def parse_args():
     parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST'])
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
     parser.add_argument('--ckpt_name', type=str, default='750.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
-    parser.add_argument('--debug', action='store_true', default=True)
+    parser.add_argument('--debug', action='store_true', default=False)
     parser.add_argument('--max_publish_step', type=int, default=1000)
     parser.add_argument('--frame_rate', type=int, default=15)
     parser.add_argument('--calibration_dir', type=str, default=str(ROOT / 'calibration_results'))
