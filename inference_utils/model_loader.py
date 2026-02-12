@@ -245,57 +245,105 @@ def _load_dp3_model(checkpoint, config):
 
 
 def _load_ghost_model(checkpoint, config):
-    """加载 GHOST 模型 - 支持所有变体（baseline/keyframe/beacon/beacon_key）"""
-    from ghost_policy import GHOSTPolicy
-    from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+    """加载 GHOST 模型 - 使用 Hydra 自动实例化（简洁版）"""
     from omegaconf import OmegaConf
     
-    # 1. 创建 noise scheduler
-    noise_scheduler_config = config.policy.noise_scheduler
-    noise_scheduler = DDPMScheduler(
-        num_train_timesteps=noise_scheduler_config.num_train_timesteps,
-        beta_schedule=noise_scheduler_config.beta_schedule,
-        clip_sample=noise_scheduler_config.clip_sample,
-        prediction_type=noise_scheduler_config.prediction_type,
-    )
+    # ========== 方法1：使用 Hydra 实例化（推荐，最简单）==========
+    model = None
+    variant_name = "Unknown"
     
-    # 2. 创建模型实例
-    # 将 OmegaConf 转换为普通字典以避免 struct mode 限制
-    model_kwargs = {
-        'shape_meta': OmegaConf.to_container(config.policy.shape_meta, resolve=True),
-        'noise_scheduler': noise_scheduler,
-        'horizon': config.policy.horizon,
-        'n_action_steps': config.policy.n_action_steps,
-        'n_obs_steps': config.policy.n_obs_steps,
-        'num_inference_steps': config.policy.get('num_inference_steps', noise_scheduler_config.num_train_timesteps),
-        'obs_as_global_cond': config.policy.obs_as_global_cond,
-        'diffusion_step_embed_dim': config.policy.diffusion_step_embed_dim,
-        'down_dims': list(config.policy.down_dims),  # 转换为 list
-        'kernel_size': config.policy.kernel_size,
-        'n_groups': config.policy.n_groups,
-        'condition_type': config.policy.condition_type,
-        'use_pc_color': config.policy.use_pc_color,
-        'pointnet_type': config.policy.pointnet_type,
-        'pointcloud_encoder_cfg': OmegaConf.to_container(config.policy.pointcloud_encoder_cfg, resolve=True) if config.policy.pointcloud_encoder_cfg else {},
-    }
+    try:
+        # 延迟导入 hydra，避免 Python 3.12 兼容性问题
+        import hydra
+        
+        print("  Using Hydra instantiation (recommended)...")
+        
+        # Hydra 会自动：
+        # 1. 根据 _target_ 导入正确的 Policy 类
+        # 2. 创建 noise_scheduler
+        # 3. 传递所有参数
+        model = hydra.utils.instantiate(config.policy)
+        
+        # 提取变体名称
+        if '_target_' in config.policy:
+            variant_name = config.policy._target_.split('.')[-1].replace('Policy', '')
+        else:
+            variant_name = "Unknown"
+        
+        print(f"  Detected GHOST variant: {variant_name}")
+        
+    except (ImportError, ValueError, Exception) as e:
+        print(f"  Hydra instantiation failed (Python 3.12 compatibility): {type(e).__name__}")
+        print("  Falling back to manual instantiation...")
     
-    # GHOST 特有参数
-    if 'use_aux_points' in config.policy:
-        model_kwargs['use_aux_points'] = config.policy.use_aux_points
-    if 'aux_point_num' in config.policy:
-        model_kwargs['aux_point_num'] = config.policy.aux_point_num
-    if 'aux_length' in config.policy:
-        model_kwargs['aux_length'] = config.policy.aux_length
-    if 'aux_radius' in config.policy:
-        model_kwargs['aux_radius'] = config.policy.aux_radius
-    if 'aux_trident_side_len' in config.policy:
-        model_kwargs['aux_trident_side_len'] = config.policy.aux_trident_side_len
-    if 'aux_trident_max_width' in config.policy:
-        model_kwargs['aux_trident_max_width'] = config.policy.aux_trident_max_width
+    # ========== 方法2：手动实例化（如果 Hydra 失败）==========
+    if model is None:
+        from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+        import importlib
+        
+        # 确定策略类
+        PolicyClass = None
+        variant_name = "Unknown"
+        
+        if '_target_' in config.policy:
+            target_path = config.policy._target_
+            try:
+                module_name, class_name = target_path.rsplit('.', 1)
+                module = importlib.import_module(module_name)
+                PolicyClass = getattr(module, class_name)
+                variant_name = class_name.replace('GHOST', '').replace('Policy', '') or 'Baseline'
+            except Exception as e2:
+                print(f"  Failed to import {target_path}: {e2}")
+        
+        if PolicyClass is None:
+            # 默认使用基础类
+            from ghost_policy import GHOSTPolicy
+            PolicyClass = GHOSTPolicy
+            variant_name = "Baseline"
+        
+        print(f"  Detected GHOST variant: {variant_name}")
+        
+        # 创建 noise scheduler
+        noise_scheduler_config = config.policy.noise_scheduler
+        noise_scheduler = DDPMScheduler(
+            num_train_timesteps=noise_scheduler_config.num_train_timesteps,
+            beta_schedule=noise_scheduler_config.beta_schedule,
+            clip_sample=noise_scheduler_config.clip_sample,
+            prediction_type=noise_scheduler_config.prediction_type,
+        )
+        
+        # 准备参数
+        model_kwargs = {
+            'shape_meta': OmegaConf.to_container(config.policy.shape_meta, resolve=True),
+            'noise_scheduler': noise_scheduler,
+            'horizon': config.policy.horizon,
+            'n_action_steps': config.policy.n_action_steps,
+            'n_obs_steps': config.policy.n_obs_steps,
+            'num_inference_steps': config.policy.get('num_inference_steps', noise_scheduler_config.num_train_timesteps),
+            'obs_as_global_cond': config.policy.obs_as_global_cond,
+            'diffusion_step_embed_dim': config.policy.diffusion_step_embed_dim,
+            'down_dims': list(config.policy.down_dims),
+            'kernel_size': config.policy.kernel_size,
+            'n_groups': config.policy.n_groups,
+            'condition_type': config.policy.condition_type,
+            'use_pc_color': config.policy.use_pc_color,
+            'pointnet_type': config.policy.pointnet_type,
+            'pointcloud_encoder_cfg': OmegaConf.to_container(config.policy.pointcloud_encoder_cfg, resolve=True) if config.policy.pointcloud_encoder_cfg else {},
+        }
+        
+        # 添加可选参数
+        optional_params = [
+            'use_aux_points', 'aux_point_num', 'aux_length', 'aux_radius',
+            'aux_trident_side_len', 'aux_trident_max_width'
+        ]
+        for param in optional_params:
+            if param in config.policy:
+                model_kwargs[param] = config.policy[param]
+        
+        # 创建模型
+        model = PolicyClass(**model_kwargs)
     
-    model = GHOSTPolicy(**model_kwargs)
-    
-    # 3. 加载权重（优先使用 EMA 模型）
+    # 5. 加载权重（优先使用 EMA 模型）
     state_dicts = checkpoint.get('state_dicts', {})
     
     # 优先加载 EMA 模型（性能更好）
@@ -308,15 +356,16 @@ def _load_ghost_model(checkpoint, config):
     else:
         raise ValueError("No model state_dict found in checkpoint")
     
-    # 4. 设置为评估模式并移动到 GPU
+    # 6. 设置为评估模式并移动到 GPU
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     
-    print(f"  GHOST model loaded on {device}")
-    print(f"  Normalizer keys: {list(model.normalizer.params_dict.keys())}")
+    print(f"  GHOST {variant_name} loaded on {device}")
+    if hasattr(model, 'normalizer'):
+        print(f"  Normalizer keys: {list(model.normalizer.params_dict.keys())}")
     
-    # 5. 创建 wrapper
+    # 7. 创建 wrapper
     return GHOSTWrapper(model, config)
 
 

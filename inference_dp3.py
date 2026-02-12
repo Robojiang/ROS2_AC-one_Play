@@ -184,17 +184,21 @@ def init_robot(ros_operator, connected_event, start_event):
     init0 = SAFE_INIT_POSITION
     init1 = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, 0.0]
     
+    print("正在移动到初始位置...")
     # 移动到初始位置
     move_to_target(ros_operator, init0, steps=100)
     
     # 通知主进程：机器人已初始化
     connected_event.set()
     
+    print("移动到初始位置完成，等待用户确认...")
     # 等待用户确认
     start_event.wait()
     
     # 最终姿态
     ros_operator.follow_arm_publish_continuous(init1, init1)
+
+    print("[INFO] 机器人初始化完成，开始推理")
 
 
 def signal_handler(sig, frame, ros_operator):
