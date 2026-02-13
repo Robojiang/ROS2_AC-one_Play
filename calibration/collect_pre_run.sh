@@ -15,7 +15,7 @@ sleep 0.3
 
 # Ac_one
 gnome-terminal --title="lift" -x $shell_type -i -c "cd ~/ARX_X5/ROS2/X5_ws; source install/setup.bash; ros2 launch arx_x5_controller v2_collect.launch.py; $shell_exec"
-sleep 0.3
+sleep 2
 gnome-terminal --title="joy" -x $shell_type -i -c "cd ~/ARX_X5/arx_joy; source install/setup.bash; ros2 run arx_joy arx_joy; $shell_exec"
 sleep 1
 

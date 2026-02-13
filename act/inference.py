@@ -37,9 +37,6 @@ import math
 
 obs_dict = collections.OrderedDict()
 
-# 安全初始位置（机械臂归位姿态）
-SAFE_INIT_POSITION = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, -2.8]
-
 import multiprocessing as mp
 
 from multiprocessing.shared_memory import SharedMemory
@@ -160,6 +157,7 @@ def get_model_config(args):
             'use_effort': args.use_effort,
             'use_eef_states': args.use_eef_states,
         }
+
         # 更新 states_dim
         policy_config['states_dim'] += policy_config['action_dim'] if args.use_qvel else 0
         policy_config['states_dim'] += 1 if args.use_effort else 0
@@ -279,43 +277,8 @@ def move_to_target(ros_operator, target_pos, steps=50):
         ros_operator.follow_arm_publish_continuous(pos.tolist(), pos.tolist())
 
 
-def move_to_safe_position(ros_operator, steps=400):
-    """将机械臂从当前位置平滑移动到安全初始位置"""
-    print("\n[INFO] 正在将机械臂移动到安全初始位置...")
-    try:
-        # 获取当前机械臂位置
-        obs = ros_operator.get_observation()
-        if obs is None:
-            print("[WARN] 无法获取当前位置，尝试直接移动")
-            ros_operator.follow_arm_publish_continuous(SAFE_INIT_POSITION, SAFE_INIT_POSITION)
-            return
-        
-        current_qpos = obs['qpos']
-        # 左臂和右臂各7个关节
-        left_start = np.array(current_qpos[:7])
-        right_start = np.array(current_qpos[7:14])
-        
-        target = np.array(SAFE_INIT_POSITION)
-        
-        # 从当前位置平滑插值到目标位置
-        for i in range(steps):
-            t = i / (steps - 1)
-            # 余弦插值，开始和结束时更平滑
-            s = (1 - math.cos(math.pi * t)) / 2
-            
-            left_pos = left_start + (target - left_start) * s
-            right_pos = right_start + (target - right_start) * s
-            
-            ros_operator.follow_arm_publish_continuous(left_pos.tolist(), right_pos.tolist())
-            time.sleep(0.02)  # 50Hz，高频率减少抖动，约8秒完成归位
-            
-        print("[INFO] 机械臂已回到安全初始位置")
-    except Exception as e:
-        print(f"[WARN] 归位过程中发生错误: {e}")
-
-
 def init_robot(ros_operator, use_base, connected_event, start_event):
-    init0 = SAFE_INIT_POSITION
+    init0 = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, -2.8]
     init1 = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, 0.0]
 
     # 发布初始位置（关节空间姿态）
@@ -330,20 +293,14 @@ def init_robot(ros_operator, use_base, connected_event, start_event):
         ros_operator.start_base_control_thread()
 
 
-def signal_handler(sig, frame, ros_operator, use_base):
-    print('\n[INFO] 捕获到退出信号，正在安全关闭...')
-
-    # 先让机械臂回到安全位置
-    move_to_safe_position(ros_operator, steps=100)
+def signal_handler(signal, frame, ros_operator):
+    print('Caught Ctrl+C / SIGINT signal')
 
     # 底盘给零
-    if use_base:
-        ros_operator.base_enable = False
-        ros_operator.robot_base_shutdown()
-        if ros_operator.base_control_thread is not None:
-            ros_operator.base_control_thread.join()
+    ros_operator.base_enable = False
+    ros_operator.robot_base_shutdown()
+    ros_operator.base_control_thread.join()
 
-    print('[INFO] 安全关闭完成')
     sys.exit(0)
 
 
@@ -372,10 +329,8 @@ def ros_process(args, config, meta_queue, connected_event, start_event, shm_read
     spin_thread = threading.Thread(target=_spin_loop, args=(ros_operator,), daemon=True)
     spin_thread.start()
 
-    # 注册信号处理，确保退出时机械臂回到安全位置
-    handler = partial(signal_handler, ros_operator=ros_operator, use_base=args.use_base)
-    signal.signal(signal.SIGINT, handler)
-    signal.signal(signal.SIGTERM, handler)
+    if args.use_base:
+        signal.signal(signal.SIGINT, partial(signal_handler, ros_operator=ros_operator))
 
     init_robot(ros_operator, args.use_base, connected_event, start_event)
 
@@ -409,64 +364,52 @@ def ros_process(args, config, meta_queue, connected_event, start_event, shm_read
     shm_ready_event.set()
 
     rate = Rate(args.frame_rate)
-    try:
-        while rclpy.ok():
-            obs = ros_operator.get_observation()
-            if not obs:
-                rate.sleep()
-
-                continue
-
-            # 写入共享内存
-            for cam in args.camera_names:
-                shm, shape, dtype = shm_dict[cam]
-                np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
-                np_array[:] = obs["images"][cam]
-            for state_key in shapes["states"]:
-                shm, shape, dtype = shm_dict[state_key]
-                np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
-                np_array[:] = obs[state_key]
-
-            # 读取动作并执行
-            shm, shape, dtype = shm_dict["action"]
-            action = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
-            if np.any(action):  # 确保动作不全是 0
-                gripper_gate = args.gripper_gate
-
-                gripper_idx = [6, 13]
-
-                left_action = action[:gripper_idx[0] + 1]  # 取7维度
-                if gripper_gate != -1:
-                    left_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
-
-                right_action = action[gripper_idx[0] + 1:gripper_idx[1] + 1]
-                if gripper_gate != -1:
-                    right_action[gripper_idx[0]] = apply_gripper_gate(right_action[gripper_idx[0]], gripper_gate)
-
-                ros_operator.follow_arm_publish(left_action, right_action)
-
-                if args.use_base:
-                    action_base = action[gripper_idx[1] + 1:gripper_idx[1] + 1 + 10]
-                    ros_operator.set_robot_base_target(action_base)
-
-
+    while rclpy.ok():
+        obs = ros_operator.get_observation()
+        if not obs:
             rate.sleep()
-    except Exception as e:
-        print(f"[ERROR] ros_process 异常: {e}")
-    finally:
-        # 确保退出时机械臂回到安全位置
-        print("[INFO] ros_process 正在清理并归位...")
-        move_to_safe_position(ros_operator, steps=100)
 
-        # 关闭底盘
-        if args.use_base:
-            ros_operator.base_enable = False
-            ros_operator.robot_base_shutdown()
+            continue
 
-        rclpy.shutdown()
-        for shm, _, _ in shm_dict.values():
-            shm.close()
-            shm.unlink()
+        # 写入共享内存
+        for cam in args.camera_names:
+            shm, shape, dtype = shm_dict[cam]
+            np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+            np_array[:] = obs["images"][cam]
+        for state_key in shapes["states"]:
+            shm, shape, dtype = shm_dict[state_key]
+            np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+            np_array[:] = obs[state_key]
+
+        # 读取动作并执行
+        shm, shape, dtype = shm_dict["action"]
+        action = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+        if np.any(action):  # 确保动作不全是 0
+            gripper_gate = args.gripper_gate
+
+            gripper_idx = [6, 13]
+
+            left_action = action[:gripper_idx[0] + 1]  # 取8维度
+            if gripper_gate != -1:
+                left_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
+
+            right_action = action[gripper_idx[0] + 1:gripper_idx[1] + 1]
+            if gripper_gate != -1:
+                right_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
+
+            ros_operator.follow_arm_publish(left_action, right_action)
+
+            if args.use_base:
+                action_base = action[gripper_idx[1] + 1:gripper_idx[1] + 1 + 10]
+                ros_operator.set_robot_base_target(action_base)
+
+        rate.sleep()
+
+    executor.shutdown()
+    rclpy.shutdown()
+    for shm, _, _ in shm_dict.values():
+        shm.close()
+        shm.unlink()
 
 
 def inference_process(args, config, shm_dict, shapes, ros_proc):
@@ -634,7 +577,7 @@ def parse_args(known=False):
                         default=Path.joinpath(ROOT, 'data/config.yaml'),
                         help='config file')
 
-    # 推理设置查看代码，修改一下，当程序关闭的时候让机械臂回到安全初始位置
+    # 推理设置
     parser.add_argument('--seed', type=int, default=0, help='seed')
     parser.add_argument('--lr', type=float, default=1e-5, help='learning rate')
     parser.add_argument('--lr_backbone', type=float, default=1e-5, help='learning rate for backbone')

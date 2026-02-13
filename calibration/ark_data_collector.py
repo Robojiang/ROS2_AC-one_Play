@@ -13,16 +13,24 @@ from pathlib import Path
 
 # Add project root to path
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]
+ROOT = FILE.parents[1]  # parents[1] 指向项目根目录 ROS2_AC-one_Play
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
+# Add act directory to path (so 'utils' can be imported directly)
+ACT_DIR = ROOT / "act"
+if str(ACT_DIR) not in sys.path:
+    sys.path.insert(0, str(ACT_DIR))
+
 # Load local message definitions & setup paths
-from utils.setup_loader import setup_loader
-setup_loader(ROOT)
+from act.utils.setup_loader import setup_loader
+# 这里的 msg 目录其实在 act/msg 下，所以应该传入 ACT_DIR
+setup_loader(ACT_DIR)
+
+from act.utils.ros_operator import RosOperator, Rate
 
 import rclpy
-from utils.ros_operator import RosOperator
+
 
 # ================= 配置 =================
 DATA_ROOT = "data_points_test"
@@ -42,7 +50,8 @@ def load_yaml(yaml_file):
 class ark_collector_args:
     """Mock args object for RosOperator"""
     def __init__(self):
-        self.config = os.path.join(ROOT, 'data/config.yaml')
+        # 配置文件路径更正：在 act/data/config.yaml 而不是 data/config.yaml
+        self.config = os.path.join(ROOT, 'act/data/config.yaml')
         self.camera_names = ['head', 'left_wrist', 'right_wrist']
         self.use_depth_image = True  # 启用深度图
         self.use_base = False

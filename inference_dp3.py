@@ -44,7 +44,7 @@ from inference_utils.calibration import load_calibration_data
 
 np.set_printoptions(linewidth=200, suppress=True)
 
-SAFE_INIT_POSITION = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, -2.8]
+SAFE_INIT_POSITION = [0.0, 0, 0, 0, 0.0, 0.0, 0]
 
 
 def load_yaml(yaml_file):
@@ -140,7 +140,7 @@ def cleanup_shm(names):
             pass
 
 
-def move_to_target(ros_operator, target_pos, steps=50):
+def move_to_target(ros_operator, target_pos, steps=100):
     """平滑移动到目标位置"""
     import math
     start = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -152,7 +152,7 @@ def move_to_target(ros_operator, target_pos, steps=50):
         ros_operator.follow_arm_publish_continuous(pos.tolist(), pos.tolist())
 
 
-def move_to_safe_position(ros_operator, steps=100):
+def move_to_safe_position(ros_operator, steps=200):
     """移动到安全位置"""
     import math
     print("\n[INFO] 正在移动到安全位置...")
@@ -172,7 +172,6 @@ def move_to_safe_position(ros_operator, steps=100):
             left_pos = left_start + (target - left_start) * s
             right_pos = right_start + (target - right_start) * s
             ros_operator.follow_arm_publish_continuous(left_pos.tolist(), right_pos.tolist())
-            time.sleep(0.02)
         
         print("[INFO] 已到达安全位置")
     except Exception as e:
@@ -181,7 +180,7 @@ def move_to_safe_position(ros_operator, steps=100):
 
 def init_robot(ros_operator, connected_event, start_event):
     """初始化机器人（遵循原始逻辑）"""
-    init0 = SAFE_INIT_POSITION
+    init0 = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, -2.8]
     init1 = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, 0.0]
     
     print("正在移动到初始位置...")
@@ -427,8 +426,19 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                 
                 if args.debug:
                     if step_count % 30 == 0:
-                        print(f"[DEBUG] Step {step_count}: action_index={action_index}/{len(action_queue)}")
-                        print(f"         Left={action[:7]}, Right={action[7:14]}")
+                        left_curr = obs_dict['qpos'][:7]
+                        right_curr = obs_dict['qpos'][7:14]
+                        left_dp = action[:7]
+                        right_dp = action[7:14]
+                        
+                        print(f"\n[DEBUG] Step {step_count}:")
+                        print(f"  Current Left : {np.round(left_curr, 3)}")
+                        print(f"  Action  Left : {np.round(left_dp, 3)}")
+                        print(f"  Delta   Left : {np.round(left_dp - left_curr, 3)}")
+                        print("-" * 40)
+                        print(f"  Current Right: {np.round(right_curr, 3)}")
+                        print(f"  Action  Right: {np.round(right_dp, 3)}")
+                        print(f"  Delta   Right: {np.round(right_dp - right_curr, 3)}")
                 else:
                     # 写入共享内存
                     shm, shape, dtype = shm_dict["action"]
@@ -457,9 +467,9 @@ def parse_args():
     parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST'])
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
     parser.add_argument('--ckpt_name', type=str, default='750.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
-    parser.add_argument('--debug', action='store_true', default=False)
+    parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--max_publish_step', type=int, default=1000)
-    parser.add_argument('--frame_rate', type=int, default=15)
+    parser.add_argument('--frame_rate', type=int, default=60)
     parser.add_argument('--calibration_dir', type=str, default=str(ROOT / 'calibration_results'))
     parser.add_argument('--data', type=str, default=str(ROOT / 'act/data/config.yaml'))
     parser.add_argument('--camera_names', nargs='+', default=['head', 'left_wrist', 'right_wrist'])
@@ -495,7 +505,7 @@ def main():
     print("[INFO] 启动ROS进程...")
     ros_proc = mp.Process(target=ros_process, args=(args, meta_queue, connected_event, start_event, shm_ready_event))
     ros_proc.start()
-    
+   
     # 等待ROS初始化
     connected_event.wait()
     print("[INFO] ROS初始化完成")

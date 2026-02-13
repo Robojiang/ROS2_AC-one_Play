@@ -19,11 +19,11 @@ if str(ROOT) not in sys.path:
 
 # Load local message definitions & setup paths
 # 必须先调用 setup_loader，否则 RosOperator 内部 import 消息会失败
-from utils.setup_loader import setup_loader
+from act.utils.ros_operator import RosOperator, Rate
+from act.utils.setup_loader import setup_loader
 setup_loader(ROOT)
 
 import rclpy
-from utils.ros_operator import RosOperator
 
 # ================= 配置区域 =================
 # 数据保存根目录
