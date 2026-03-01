@@ -14,7 +14,7 @@ sleep 0.3
 
 # Ac_one
 gnome-terminal --title="lift" -x $shell_type -i -c "cd ../../../ARX_X5/ROS2/X5_ws; source install/setup.bash; ros2 launch arx_x5_controller v2_joint_control.launch.py; $shell_exec"
-sleep 2
+sleep 1
 
 # Realsense
 gnome-terminal --title="realsense" -x $shell_type -i -c "cd ${workspace}; cd ../realsense; ./realsense.sh; $shell_exec"

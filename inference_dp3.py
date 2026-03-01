@@ -41,8 +41,62 @@ from act.utils.setup_loader import setup_loader
 from inference_utils.pointcloud_generator import PointCloudGenerator
 from inference_utils.model_loader import load_policy_model
 from inference_utils.calibration import load_calibration_data
+from scipy.spatial.transform import Rotation as R
 
-np.set_printoptions(linewidth=200, suppress=True)
+def euler_to_w_last_quat(euler):
+    """
+    Euler angles (xyz) to Quaternion [x, y, z, w] (scipy default)
+    Then convert to [w, x, y, z] to match GHOST dataset format.
+    """
+    q = R.from_euler('xyz', euler).as_quat() # [x, y, z, w]
+    return np.array([q[3], q[0], q[1], q[2]]) # -> [w, x, y, z]
+
+def quat_to_rot6d(quat):
+    """
+    Convert quaternion to 6D rotation representation.
+    quat: (..., 4) in [w, x, y, z] format
+    Returns: (..., 6)
+    """
+    quat = np.array(quat)
+    # Ensure it's floats
+    if quat.dtype != np.float32 and quat.dtype != np.float64:
+        quat = quat.astype(np.float32)
+        
+    w, x, y, z = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+    
+    xx, yy, zz = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
+    xw, yw, zw = x*w, y*w, z*w
+    
+    # First column
+    r11 = 1 - 2 * (yy + zz)
+    r21 = 2 * (xy + zw)
+    r31 = 2 * (xz - yw)
+    
+    # Second column
+    r12 = 2 * (xy - zw)
+    r22 = 1 - 2 * (xx + zz)
+    r32 = 2 * (yz + xw)
+    
+    rot6d = np.stack([r11, r21, r31, r12, r22, r32], axis=-1)
+    return rot6d
+
+def get_ghost_agent_pos(qpos, left_pos, left_quat, right_pos, right_quat):
+    """
+    构造 GHOST 策略所需的 32维 agent_pos
+    Structure: [qpos(14), left_9d(9), right_9d(9)]
+    where 9d = [pos(3), rot6d(6)]
+    Total: 14 + 18 = 32
+    """
+    # Left (9D)
+    left_rot6d = quat_to_rot6d(left_quat)
+    left_9d = np.concatenate([left_pos, left_rot6d])
+    
+    # Right (9D)
+    right_rot6d = quat_to_rot6d(right_quat)
+    right_9d = np.concatenate([right_pos, right_rot6d])
+    
+    return np.concatenate([qpos, left_9d, right_9d])
 
 SAFE_INIT_POSITION = [0.0, 0, 0, 0, 0.0, 0.0, 0]
 
@@ -334,8 +388,11 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
     
     # 3. 观测缓存 - 用于构建历史观测
     obs_buffer = []  # 存储 (point_cloud, agent_pos) 元组
-    action_queue = []  # 动作队列
-    action_index = 0  # 当前执行到第几个动作
+    
+    # === RHC (Receding Horizon Control) 变量 ===
+    current_action_chunk = None # 存储当前预测的一整块动作
+    action_execution_idx = 0    # 当前块执行到了第几步
+    EXECUTION_HORIZON = 8       # 每执行8步重新推理一次 (可根据推理速度调整)
     
     step_count = 0
     print(f"[INFO] 开始推理循环 (max_steps={args.max_publish_step})")
@@ -362,8 +419,8 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
             shm, shape, dtype = shm_dict["eef"]
             obs_dict["eef"] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
             
-            # 生成点云
-            point_cloud = pc_generator.generate(
+            # 生成点云 (获取统一坐标系下的末端位姿)
+            point_cloud, transformed_eef = pc_generator.generate(
                 head_depth=obs_dict['images_depth']['head'],
                 head_color=obs_dict['images']['head'],
                 left_depth=obs_dict['images_depth']['left_wrist'],
@@ -380,9 +437,31 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                 T_LB_H=calibration_data['T_LB_H']
             )
             
-            # 准备 agent_pos (14D for DP3, 32D for GHOST)
-            agent_pos = obs_dict['qpos']  # (14,)
-            
+            # --- 构造 Agent Pos ---
+            if args.policy == 'GHOST':
+                # GHOST 需要: [qpos(14), left_pos(3), left_rot6d(6), right_pos(3), right_rot6d(6)] = 32
+                # eef 数据来自 transformed_eef (已经在左臂基座系下)
+                # Left
+                l_pos = transformed_eef['left'][:3]
+                l_euler = transformed_eef['left'][3:6]
+                l_quat = euler_to_w_last_quat(l_euler) # Euler -> [w, x, y, z]
+                
+                # Right
+                r_pos = transformed_eef['right'][:3]
+                r_euler = transformed_eef['right'][3:6]
+                r_quat = euler_to_w_last_quat(r_euler) # Euler -> [w, x, y, z]
+                
+                agent_pos = get_ghost_agent_pos(
+                    obs_dict['qpos'], 
+                    l_pos, l_quat,
+                    r_pos, r_quat
+                )
+            else:
+                # DP3 (通常只需 qpos=14 或者 qpos+eef=28，视训练配置而定)
+                # 你之前的报错显示 DP3 正常跑通，所以如果不改 GHOST 逻辑，DP3 维持原状
+                # 这里假设 DP3 只需要 qpos (14)
+                 agent_pos = obs_dict['qpos']
+
             # 添加到观测缓存
             obs_buffer.append((point_cloud, agent_pos))
             if len(obs_buffer) > n_obs_steps:
@@ -392,8 +471,15 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
             while len(obs_buffer) < n_obs_steps:
                 obs_buffer.insert(0, obs_buffer[0])
             
-            # 检查是否需要推理新动作
-            if action_index >= len(action_queue):
+            # === Receding Horizon Control 逻辑 ===
+            # 1. 如果没有动作块
+            # 2. 或者已经执行了 EXECUTION_HORIZON 步
+            # 3. 或者当前块已经快执行完了 (保护措施)
+            need_inference = (current_action_chunk is None) or \
+                             (action_execution_idx >= EXECUTION_HORIZON) or \
+                             (action_execution_idx >= len(current_action_chunk))
+
+            if need_inference:
                 # 构建模型输入：(B=1, To, N, 6) 和 (B=1, To, D)
                 point_clouds = []
                 agent_poses = []
@@ -412,17 +498,20 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                 }
                 
                 # 推理
+                if args.debug: t0 = time.time()
                 actions = policy.predict_action(model_input)  # (1, horizon, action_dim)
-                action_queue = actions[0]  # (horizon, action_dim)
-                action_index = 0
-                
                 if args.debug and step_count % 30 == 0:
-                    print(f"[DEBUG] 新推理: action_queue.shape={action_queue.shape}")
-            
-            # 获取当前动作
-            if action_index < len(action_queue):
-                action = action_queue[action_index]
-                action_index += 1
+                     print(f"[DEBUG] 推理耗时: {(time.time()-t0)*1000:.1f}ms")
+
+                current_action_chunk = actions[0]  # (horizon, action_dim)
+                action_execution_idx = 0
+                
+            # === 获取并执行当前动作 ===
+            if current_action_chunk is not None:
+                # 防止索引越界
+                safe_idx = min(action_execution_idx, len(current_action_chunk) - 1)
+                action = current_action_chunk[safe_idx]
+                action_execution_idx += 1
                 
                 if args.debug:
                     if step_count % 30 == 0:
@@ -464,10 +553,12 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST'])
+    parser.add_argument('--policy', type=str, default='GHOST', choices=['DP3', 'GHOST'])
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
-    parser.add_argument('--ckpt_name', type=str, default='750.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
+    parser.add_argument('--ckpt_name', type=str, help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
+    # parser.add_argument('--ckpt_name', type=str, default='750.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     parser.add_argument('--debug', action='store_true', default=True)
+    # parser.add_argument('--debug', action='store_true')
     parser.add_argument('--max_publish_step', type=int, default=1000)
     parser.add_argument('--frame_rate', type=int, default=60)
     parser.add_argument('--calibration_dir', type=str, default=str(ROOT / 'calibration_results'))

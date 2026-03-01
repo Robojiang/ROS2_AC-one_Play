@@ -369,18 +369,14 @@ def transform_right_endpose_to_left_base(right_eef_array, T_H_LB, T_H_RB):
     """
     将右臂末端姿态从右臂基座坐标系转换到左臂基座坐标系
     right_eef_array: (N, 7) [x, y, z, rx, ry, rz, gripper]
-    T_H_LB: (4, 4) Head到左臂基座的变换矩阵 (注意: 文件名head_base_to_left的含义)
-    T_H_RB: (4, 4) Head到右臂基座的变换矩阵
-    返回: (N, 7) 在左臂基座坐标系下的姿态
-    
-    变换链: Head -> RightBase -> RightEnd, 然后转到LeftBase
-    即: T_LB_RE = T_H_LB @ T_H_RB @ T_RB_RE
+    Returns: (N, 7) [x, y, z, w, x, y, z] (GHOST格式: Pos + Quaternion(w-first))
     """
     N = len(right_eef_array)
-    result = np.zeros_like(right_eef_array)
+    result = np.zeros((N, 7))
     
     for i in range(N):
-        # 提取右臂末端在右臂基座系下的姿态
+        # 提取右臂末端在右臂基座系下的姿态 [xyz rpy]
+        # 注意: eef_to_matrix 用的就是 [xyz rpy], 不需要改
         T_RB_RE = eef_to_matrix(right_eef_array[i])
         
         # 转换到左臂基座系: Head -> RightBase -> RightEnd, 再转到LeftBase
@@ -389,12 +385,15 @@ def transform_right_endpose_to_left_base(right_eef_array, T_H_LB, T_H_RB):
         # 提取位置
         result[i, :3] = T_LB_RE[:3, 3]
         
-        # 提取旋转(转换为欧拉角)
+        # 提取旋转 (转换为四元数 [w, x, y, z])
         rot_matrix = T_LB_RE[:3, :3]
-        result[i, 3:6] = R.from_matrix(rot_matrix).as_euler('xyz')
+        q = R.from_matrix(rot_matrix).as_quat() # [x, y, z, w]
+        result[i, 3] = q[3] # w
+        result[i, 4] = q[0] # x
+        result[i, 5] = q[1] # y
+        result[i, 6] = q[2] # z
         
-        # 夹爪值不变
-        result[i, 6] = right_eef_array[i, 6]
+        # 0. 舍弃夹爪值 (GHOST 不需要 endpose 里的夹爪，它在 state 里)
     
     return result
 
@@ -428,7 +427,29 @@ def get_keyframe_mask(eef_data, gripper_delta=0.05, min_interval=5):
             mask[i] = True
             last_keyframe_idx = i
     
-    return mask
+def convert_pose_to_ghost_format(pose_rpy_7d):
+    """
+    Args: pose_rpy_7d (N, 7) [x, y, z, rx, ry, rz, gripper]
+    Returns: (N, 7) [x, y, z, w, x, y, z] (GHOST: Pos + Quat(w-first))
+    """
+    N = len(pose_rpy_7d)
+    result = np.zeros((N, 7))
+    
+    # 提取位置
+    result[:, :3] = pose_rpy_7d[:, :3]
+    
+    # 提取RPY并转四元数
+    # R.from_euler expects (N, 3)
+    eulers = pose_rpy_7d[:, 3:6]
+    quats = R.from_euler('xyz', eulers).as_quat() # [x, y, z, w]
+    
+    # 重排为 [w, x, y, z]
+    result[:, 3] = quats[:, 3] # w
+    result[:, 4] = quats[:, 0] # x
+    result[:, 5] = quats[:, 1] # y
+    result[:, 6] = quats[:, 2] # z
+    
+    return result
 
 # ================= 主转换函数 =================
 
@@ -441,6 +462,8 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
         task_dir: 任务文件夹路径
         max_episodes: 用于debug,只转换前N个episode (None表示转换全部)
     """
+    import math
+
     # 自动扫描HDF5文件
     print(f"\n{'='*80}")
     print(f"🎯 任务: {task_name}")
@@ -587,9 +610,18 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
             ep_point_cloud = point_clouds[:-1]  # (T-1, 1024, 6)
             ep_images = images[:-1]  # (T-1, 4, 240, 320, 3)
             ep_keyframe_mask = keyframe_mask[:-1]  # (T-1,)
-            ep_left_endpose = eef_data[:-1, :7]  # (T-1, 7) 左臂已经在左臂基座系
-            # 右臂: 先转到Head系,再转到LeftBase系 (和点云变换一致)
+            
+            # --- 修复：GHOST 数据集需要 Pos + Quaternion (7D) ---
+            # 左臂: 原始 eef 是 [xyz rpy gripper]，要转为 [xyz wxyz]
+            ep_left_endpose = convert_pose_to_ghost_format(eef_data[:-1, :7])
+            
+            # 右臂: 已经经过 transform_right_endpose_to_left_base，该函数我也已经帮你改成了返回 [xyz wxyz]
             ep_right_endpose = transform_right_endpose_to_left_base(eef_data[:-1, 7:14], T_H_LB, T_H_RB)
+            
+            # --- Debug: 打印前3帧的维度和数据范围 ---
+            if total_count == 0:
+                print(f"[DEBUG] EP_LEFT_ENDPOSE shape: {ep_left_endpose.shape}")
+                print(f"[DEBUG] EP_LEFT_ENDPOSE[0]: {ep_left_endpose[0]}")
             
             # 第一次初始化Zarr数据集
             if not zarr_datasets:

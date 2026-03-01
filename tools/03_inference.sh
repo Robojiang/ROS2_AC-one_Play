@@ -20,4 +20,4 @@ gnome-terminal --title="realsense" -x $shell_type -i -c "cd ${workspace}; cd ../
 sleep 3
 
 # Inference
-gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ../act; conda activate act; python inference.py; $shell_exec"   
+gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ../act; conda activate act; python inference.py; --use_depth_image $shell_exec"   

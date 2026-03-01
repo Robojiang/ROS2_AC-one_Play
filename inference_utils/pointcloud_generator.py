@@ -143,6 +143,30 @@ class PointCloudGenerator:
              self.intrinsics = intrinsics
              self._init_ray_dirs()
 
+        # --- 计算统一坐标系下的末端位姿 (都在 Left Base 下) ---
+        # 1. 左手: 假设已经是相对于 Left Base
+        left_eef_transformed = np.array(left_eef, dtype=np.float32)
+
+        # 2. 右手: RightBase -> Head -> LeftBase
+        # T_LB_H 在这里实际上是从 Head 到 LeftBase 的变换矩阵 (用于统一将所有点云转到 LeftBase)
+        # 变换链: T_LB_RE = T_LB_H @ T_H_RB @ T_RB_RE
+        T_RB_RE = self.eef_to_matrix(right_eef)
+        T_LB_RE = T_LB_H @ T_H_RB @ T_RB_RE
+        
+        right_pos_new = T_LB_RE[:3, 3]
+        right_rpy_new = R.from_matrix(T_LB_RE[:3, :3]).as_euler('xyz', degrees=False)
+        
+        right_eef_transformed = np.zeros(7, dtype=np.float32)
+        right_eef_transformed[:3] = right_pos_new
+        right_eef_transformed[3:6] = right_rpy_new
+        right_eef_transformed[6] = right_eef[6]
+
+        transformed_eef = {
+            'left': left_eef_transformed,
+            'right': right_eef_transformed
+        }
+        # ----------------------------------------------------
+
         clouds = []
         # 1. Head Camera
         pc_head = self.depth_to_pointcloud(head_depth, head_color, 'head', max_depth=self.max_depth_head)
@@ -165,7 +189,7 @@ class PointCloudGenerator:
         
         # --- 合并 ---
         if len(clouds) == 0:
-            return np.zeros((self.fps_sample_points, 6), dtype=np.float32)
+            return np.zeros((self.fps_sample_points, 6), dtype=np.float32), transformed_eef
         merged = torch.cat(clouds, dim=0)
         
         # --- 统一转换到基座坐标系 ---
@@ -176,7 +200,7 @@ class PointCloudGenerator:
             merged = self.crop_pointcloud(merged, self.workspace_x_range, self.workspace_y_range, self.workspace_z_range)
         
         if len(merged) == 0:
-            return np.zeros((self.fps_sample_points, 6), dtype=np.float32)
+            return np.zeros((self.fps_sample_points, 6), dtype=np.float32), transformed_eef
 
         # ====== 后处理路径 (Open3D CPU) ======
         # 参考 convert_hdf5_to_zarr.py 的做法
@@ -219,4 +243,4 @@ class PointCloudGenerator:
             else:
                 result = padding
             
-        return result
+        return result, transformed_eef
