@@ -31,6 +31,8 @@ sys.path.append(os.path.join(policy_dir, 'DP3', '3D-Diffusion-Policy'))
 from ghost_keyframe_policy import GHOSTKeyframePolicy
 from dataset.ghost_keyframe_dataset import GHOSTKeyframeDataset
 
+noise_ratio = 0.01 # 用于可视化的噪声比例 (可以调整以看到更明显的偏移)
+
 def visualize_keyframe_policy(zarr_path, episode_idx=0, save_video=False):
     print(f"Loading dataset from: {zarr_path}")
     
@@ -87,7 +89,7 @@ def visualize_keyframe_policy(zarr_path, episode_idx=0, save_video=False):
         aux_trident_max_width=0.08,
         aux_radius=0.01,
         use_keyframe_prediction=True,
-        keyframe_noise_std=0.1 # Use default noise std
+        keyframe_noise_std=noise_ratio # Use default noise std
     )
     
     # Fit Normalizer (Required for correctly adding noise in normalized space)
@@ -149,15 +151,15 @@ def visualize_keyframe_policy(zarr_path, episode_idx=0, save_video=False):
             real_pts = real_aux.squeeze().numpy()
             
             # Generate Ghost Trident (Points) with visualization noise
-            # Mimic the training logic: Normalize -> Add Noise -> Unnormalize
-            target_keypose_norm = policy.normalizer['target_keypose'].normalize(target_keypose)
+            # 直接在物理空间（Raw Space）加噪，保证左右手物理空间的扰动尺度一致且稳定
+            target_keypose_raw = target_keypose # (1, 1, 18)
             
-            # Use larger noise for visualization clarity (e.g. 0.3)
-            vis_noise_std = 0.05 
-            noise = torch.randn_like(target_keypose_norm) * vis_noise_std
-            noisy_keypose_norm = target_keypose_norm + noise
+            # 设置物理空间的噪声标准差 (米/弧度)
+            # 如果 noise_ratio 为 0，则无噪声；否则使用该值作为物理标准差
+            vis_noise_std = noise_ratio if noise_ratio > 0 else 0.0
             
-            noisy_keypose_raw = policy.normalizer['target_keypose'].unnormalize(noisy_keypose_norm)
+            noise = torch.randn_like(target_keypose_raw) * vis_noise_std
+            noisy_keypose_raw = target_keypose_raw + noise
             
             ghost_aux = policy._generate_trident_from_pose(noisy_keypose_raw) # (1, 1, K, 3)
             ghost_pts = ghost_aux.squeeze().numpy()
@@ -246,7 +248,7 @@ def visualize_keyframe_policy(zarr_path, episode_idx=0, save_video=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--zarr_path", type=str, 
-                        default="policy/VGC/data/stack_blocks_two-demo_3d_vision_hard-100-ppi.zarr",
+                        default="/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets_zarr/pick_place_d405.zarr",
                         help="Path to zarr dataset")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--save_video", default=True, type=bool, help="Whether to save the visualization as video")

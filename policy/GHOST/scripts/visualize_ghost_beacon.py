@@ -87,7 +87,7 @@ def visualize_beacon_policy(zarr_path, episode_idx=0, save_video=False):
         aux_trident_max_width=0.08,
         aux_radius=0.01,
         use_keyframe_prediction=True,
-        keyframe_noise_std=0.02,
+        keyframe_noise_std=0.01,
         beacon_sigma=0.3 # Adjust this for visualization clarity
     )
     
@@ -170,14 +170,16 @@ def visualize_beacon_policy(zarr_path, episode_idx=0, save_video=False):
                 scale = params['scale'].to(gt_beacons_left.device)[:3].unsqueeze(0).unsqueeze(0).unsqueeze(0)
                 offset = params['offset'].to(gt_beacons_left.device)[:3].unsqueeze(0).unsqueeze(0).unsqueeze(0)
                 
-                # Normalize Beacons (x * scale + offset)
-                gt_beacons_left_norm = gt_beacons_left * scale + offset
-                gt_beacons_right_norm = gt_beacons_right * scale + offset
-                
-                # Add Noise in Normalized Space
+                # Add Noise in Raw Space (Physical Consistency)
                 vis_noise_std = policy.keyframe_noise_std
-                vis_beacons_left_norm = gt_beacons_left_norm + torch.randn_like(gt_beacons_left_norm) * vis_noise_std
-                vis_beacons_right_norm = gt_beacons_right_norm + torch.randn_like(gt_beacons_right_norm) * vis_noise_std
+                
+                # Apply noise to Raw Beacons
+                vis_beacons_left_raw = gt_beacons_left + torch.randn_like(gt_beacons_left) * vis_noise_std
+                vis_beacons_right_raw = gt_beacons_right + torch.randn_like(gt_beacons_right) * vis_noise_std
+                
+                # Normalize Noisy Beacons for Heatmap
+                vis_beacons_left_norm = vis_beacons_left_raw * scale + offset
+                vis_beacons_right_norm = vis_beacons_right_raw * scale + offset
                 
                 # Normalize Scene PC & Aux for Heatmap
                 # pc_xyz is (1, 1, N, 3)
@@ -192,17 +194,6 @@ def visualize_beacon_policy(zarr_path, episode_idx=0, save_video=False):
                 heat_left = policy._compute_heatmap(all_xyz_norm, vis_beacons_left_norm, sigma=policy.beacon_sigma)
                 heat_right = policy._compute_heatmap(all_xyz_norm, vis_beacons_right_norm, sigma=policy.beacon_sigma)
                 
-                # For display of the white dots, we need to unnormalize the noisy beacons back to RAW
-                vis_beacons_left_raw = (vis_beacons_left_norm - offset) / scale
-                vis_beacons_right_raw = (vis_beacons_right_norm - offset) / scale
-                
-            else:
-                 # No normalization fallback
-                 vis_beacons_left_raw = gt_beacons_left
-                 vis_beacons_right_raw = gt_beacons_right
-                 all_xyz_raw = torch.cat([pc_xyz, aux_xyz], dim=2)
-                 heat_left = policy._compute_heatmap(all_xyz_raw, vis_beacons_left_raw, sigma=policy.beacon_sigma)
-                 heat_right = policy._compute_heatmap(all_xyz_raw, vis_beacons_right_raw, sigma=policy.beacon_sigma)
 
             # 4. Prepare Colors for Visualization
             # Points: all_xyz (RAW)
@@ -291,7 +282,7 @@ def visualize_beacon_policy(zarr_path, episode_idx=0, save_video=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--zarr_path", type=str, 
-                        default="policy/VGC/data/stack_blocks_two-demo_3d_vision_hard-100-ppi.zarr",
+                        default="/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets_zarr/pick_place_d405.zarr",
                         help="Path to zarr dataset")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--save_video", default=True, type=bool, help="Whether to save the visualization as video")

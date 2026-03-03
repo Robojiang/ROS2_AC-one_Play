@@ -152,3 +152,4 @@ weights/*
 policy/DP3/3D-Diffusion-Policy/diffusion_policy_3d.egg-info
 *.png
 act/weights/*
+*.mp4

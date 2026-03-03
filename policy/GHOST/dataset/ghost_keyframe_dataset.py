@@ -91,19 +91,24 @@ class GHOSTKeyframeDataset(BaseDataset):
         
         # --- Pre-compute Target Keypose (18D) ---
         # 1. Construct 18D poses for all steps
-        print("[GHOSTKeyframeDataset] Pre-computing Target Keyposes...")
+        print("[GHOSTKeyframeDataset] Pre-computing Target Keyposes (20D: [Pos(3)+Rot(6)+Grip(1)] * 2)...")
         left_endpose = self.replay_buffer["left_endpose"][:]
         right_endpose = self.replay_buffer["right_endpose"][:]
+        state = self.replay_buffer["state"][:] # Need state for gripper
         
+        # Left Arm (Index 6 is gripper)
         l_pos = left_endpose[..., :3]
         l_rot = quat_to_rot6d(left_endpose[..., 3:])
-        l_9d = np.concatenate([l_pos, l_rot], axis=-1)
+        l_grip = state[..., 6:7] # (T, 1)
+        l_10d = np.concatenate([l_pos, l_rot, l_grip], axis=-1)
         
+        # Right Arm (Index 13 is gripper)
         r_pos = right_endpose[..., :3]
         r_rot = quat_to_rot6d(right_endpose[..., 3:])
-        r_9d = np.concatenate([r_pos, r_rot], axis=-1)
+        r_grip = state[..., 13:14] # (T, 1)
+        r_10d = np.concatenate([r_pos, r_rot, r_grip], axis=-1)
         
-        all_18d = np.concatenate([l_9d, r_9d], axis=-1).astype(np.float32)
+        all_20d = np.concatenate([l_10d, r_10d], axis=-1).astype(np.float32)
         
         # 2. Find next keyframe index for each step
         mask = self.replay_buffer['keyframe_mask'][:]
@@ -115,7 +120,7 @@ class GHOSTKeyframeDataset(BaseDataset):
                 last_idx = i
             next_indices[i] = last_idx
             
-        target_keypose = all_18d[next_indices]
+        target_keypose = all_20d[next_indices]
         
         # 3. Inject into Buffer
         # Use root['data'] to bypass ReplayBuffer wrapper limitations
@@ -152,9 +157,9 @@ class GHOSTKeyframeDataset(BaseDataset):
 
     def get_normalizer(self, mode="limits", **kwargs):
         # Construct data for normalization matching __getitem__ structure
-        state = self.replay_buffer["state"]
-        left_endpose = self.replay_buffer["left_endpose"]
-        right_endpose = self.replay_buffer["right_endpose"]
+        state = self.replay_buffer["state"][:]
+        left_endpose = self.replay_buffer["left_endpose"][:]
+        right_endpose = self.replay_buffer["right_endpose"][:]
         
         # Convert to 9D
         left_pos = left_endpose[..., :3]
@@ -165,14 +170,16 @@ class GHOSTKeyframeDataset(BaseDataset):
         right_rot = quat_to_rot6d(right_endpose[..., 3:])
         right_9d = np.concatenate([right_pos, right_rot], axis=-1)
         
-        # Agent Pos: [Joint(14), Left(9), Right(9)] -> 32D
         agent_pos = np.concatenate([state, left_9d, right_9d], axis=-1)
+
+        # Scale: [Action(14), PointCloud(6), AgentPos(32), TargetKeypose(20)]
+        target_keypose = self.replay_buffer['target_keypose'][:] # Add 20D keypose for normalization
         
         data = {
-            'action': self.replay_buffer['action'],
-            'point_cloud': self.replay_buffer['point_cloud'], # Normalize all channels (XYZ+RGB) like DP3
+            'action': self.replay_buffer['action'][:],
+            'point_cloud': self.replay_buffer['point_cloud'][:],
             'agent_pos': agent_pos,
-            'target_keypose': self.replay_buffer['target_keypose'] # Add 18D keypose for normalization
+            'target_keypose': target_keypose
         }
         
         normalizer = LinearNormalizer()

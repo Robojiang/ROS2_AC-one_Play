@@ -22,6 +22,7 @@ class PointCloudGenerator:
                  workspace_z_range=(-0.2, 1.0),
                  voxel_size=0.005,
                  downsample_size=(160, 120),
+                 use_random_sampling=True,
                  device=None):
         self.max_depth_head = max_depth_head
         self.max_depth_hand = max_depth_hand
@@ -32,6 +33,7 @@ class PointCloudGenerator:
         self.workspace_z_range = workspace_z_range
         self.voxel_size = voxel_size
         self.downsample_size = downsample_size
+        self.use_random_sampling = use_random_sampling
         self.device = torch.device(device) if device else (torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
 
         # 兼容推理/训练两种用法，若初始化时未提供内参，将在第一次generate时初始化
@@ -132,7 +134,7 @@ class PointCloudGenerator:
                 right_depth, right_color, left_eef, right_eef,
                 intrinsics, T_H_LB, T_H_RB, T_LE_LC, T_RE_RC, T_LB_H):
         
-        # 若需要，重新初始化内参
+        # 若需要，重新初始化内参及中心坐标系
         try:
              # 判断内参是否变化
              if (not hasattr(self, 'intrinsics')) or (self.intrinsics != intrinsics):
@@ -143,18 +145,34 @@ class PointCloudGenerator:
              self.intrinsics = intrinsics
              self._init_ray_dirs()
 
-        # --- 计算统一坐标系下的末端位姿 (都在 Left Base 下) ---
-        # 1. 左手: 假设已经是相对于 Left Base
-        left_eef_transformed = np.array(left_eef, dtype=np.float32)
+        # 懒加载：只在第一帧计算以此固定 Center Base 和裁剪区域，避免每帧重复计算
+        if not hasattr(self, 'T_CB_LB'):
+            # --- 计算双臂基座中点 (作为 Center Base 新全局中心) ---
+            # RightBase 在 LeftBase 坐标系下的位姿: T_LB_RB = T_LB_H @ T_H_RB
+            T_LB_RB = T_LB_H @ T_H_RB
+            self.mid_pos = (T_LB_RB[:3, 3] / 2.0).astype(np.float32)
+            
+            # 构建 LeftBase -> CenterBase 的平移矩阵
+            self.T_CB_LB = np.eye(4, dtype=np.float32)
+            self.T_CB_LB[:3, 3] = -self.mid_pos
 
-        # 2. 右手: RightBase -> Head -> LeftBase
-        # T_LB_H 在这里实际上是从 Head 到 LeftBase 的变换矩阵 (用于统一将所有点云转到 LeftBase)
-        # 变换链: T_LB_RE = T_LB_H @ T_H_RB @ T_RB_RE
+            # 动态调整裁剪区域 (因为点云被平移了 -mid_pos，所以原本的裁剪边界也要平移 -mid_pos)
+            self.center_x_range = (self.workspace_x_range[0] - self.mid_pos[0], self.workspace_x_range[1] - self.mid_pos[0])
+            self.center_y_range = (self.workspace_y_range[0] - self.mid_pos[1], self.workspace_y_range[1] - self.mid_pos[1])
+            self.center_z_range = (self.workspace_z_range[0] - self.mid_pos[2], self.workspace_z_range[1] - self.mid_pos[2])
+
+        # --- 计算统一坐标系下的末端位姿 (都在 Center Base 下) ---
+        # 1. 左手: 原始在 Left Base, 平移到 Center Base (-mid_pos)
+        left_eef_transformed = np.array(left_eef, dtype=np.float32)
+        left_eef_transformed[:3] -= self.mid_pos
+
+        # 2. 右手: RightBase -> Head -> LeftBase -> CenterBase
         T_RB_RE = self.eef_to_matrix(right_eef)
         T_LB_RE = T_LB_H @ T_H_RB @ T_RB_RE
+        T_CB_RE = self.T_CB_LB @ T_LB_RE
         
-        right_pos_new = T_LB_RE[:3, 3]
-        right_rpy_new = R.from_matrix(T_LB_RE[:3, :3]).as_euler('xyz', degrees=False)
+        right_pos_new = T_CB_RE[:3, 3]
+        right_rpy_new = R.from_matrix(T_CB_RE[:3, :3]).as_euler('xyz', degrees=False)
         
         right_eef_transformed = np.zeros(7, dtype=np.float32)
         right_eef_transformed[:3] = right_pos_new
@@ -192,18 +210,18 @@ class PointCloudGenerator:
             return np.zeros((self.fps_sample_points, 6), dtype=np.float32), transformed_eef
         merged = torch.cat(clouds, dim=0)
         
-        # --- 统一转换到基座坐标系 ---
-        merged = self.transform_pointcloud(merged, T_LB_H)
+        # --- 统一转换到基座坐标系 (即 Center Base) ---
+        T_CB_H = self.T_CB_LB @ T_LB_H
+        merged = self.transform_pointcloud(merged, T_CB_H)
         
         # --- 空间裁剪 (GPU) ---
         if self.use_workspace_crop:
-            merged = self.crop_pointcloud(merged, self.workspace_x_range, self.workspace_y_range, self.workspace_z_range)
+            merged = self.crop_pointcloud(merged, self.center_x_range, self.center_y_range, self.center_z_range)
         
         if len(merged) == 0:
             return np.zeros((self.fps_sample_points, 6), dtype=np.float32), transformed_eef
 
         # ====== 后处理路径 (Open3D CPU) ======
-        # 参考 convert_hdf5_to_zarr.py 的做法
         merged_cpu = merged.cpu().numpy()
         pcd = o3d.geometry.PointCloud()
         if merged_cpu.shape[0] > 0:
@@ -221,11 +239,18 @@ class PointCloudGenerator:
             clrs = np.asarray(pcd_voxel.colors)
             
             if len(pts) > self.fps_sample_points:
-                # 随机采样 (比FPS快，效果接近)
-                indices = np.random.choice(len(pts), self.fps_sample_points, replace=False)
-                pts = pts[indices]
-                clrs = clrs[indices]
-                result = np.hstack((pts, clrs)).astype(np.float32)
+                if self.use_random_sampling:
+                    # 随机采样 (比FPS快，效果接近)
+                    indices = np.random.choice(len(pts), self.fps_sample_points, replace=False)
+                    pts = pts[indices]
+                    clrs = clrs[indices]
+                    result = np.hstack((pts, clrs)).astype(np.float32)
+                else:
+                    # FPS采样 (慢但均匀)
+                    pcd_fps = pcd_voxel.farthest_point_down_sample(self.fps_sample_points)
+                    pts = np.asarray(pcd_fps.points)
+                    clrs = np.asarray(pcd_fps.colors)
+                    result = np.hstack((pts, clrs)).astype(np.float32)
             else:
                 # 点数不足，全取
                 if len(pts) > 0:

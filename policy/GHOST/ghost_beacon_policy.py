@@ -176,27 +176,20 @@ class GHOSTBeaconPolicy(BasePolicy):
         b3 = torch.cross(b1, b2, dim=-1)
         return torch.stack([b1, b2, b3], dim=-2)
 
-    def _get_beacons_from_pose(self, pose_18d):
+    def _get_beacons_from_pose(self, pose_20d):
         """
-        Extract beacon points (gripper tips) from the 18D pose.
+        Extract beacon points (gripper tips) from the 20D pose.
         Beacons are the endpoints of the 'short edges' of the trident.
+        pose_20d: (B, T, 20)
         """
-        if pose_18d.dim() == 2:
-            pose_18d = pose_18d.unsqueeze(1)
-        B, T, _ = pose_18d.shape
+        if pose_20d.dim() == 2:
+            pose_20d = pose_20d.unsqueeze(1)
+        B, T, _ = pose_20d.shape
         
         # Helper to process one gripper
         def process_gripper(pos, rot6d, gripper_width):
              # pos: (B, T, 3), rot6d: (B, T, 6)
              rot_mat = self._rot6d_to_mat(rot6d) # (B, T, 3, 3)
-             
-             # Local geometry for short edge endpoints
-             # Left Tip: [side_len, +width, 0]
-             # Right Tip: [side_len, -width, 0]
-             
-             # If width is 0 (e.g. gripper closed or user config), the two points will merge on the axis.
-             # Ensure width has a minimum value for visualization/heatmap separation if desired, 
-             # but here we respect the config.
              
              side_len = self.aux_trident_side_len
              width = gripper_width * self.aux_trident_max_width
@@ -204,38 +197,63 @@ class GHOSTBeaconPolicy(BasePolicy):
              # Create local points (B, T, 2, 3)
              zeros = torch.zeros_like(width)
              
-             # Important: The coordinate system here assumes X is forward (along the tool axis),
-             # Y is Left/Right (Width), Z is Up/Down.
-             # Check if your gripper geometry matches this.
-             
              l_tip_local = torch.stack([torch.full_like(width, side_len), width, zeros], dim=-1)
              r_tip_local = torch.stack([torch.full_like(width, side_len), -width, zeros], dim=-1)
              
              tips_local = torch.stack([l_tip_local, r_tip_local], dim=2) # (B, T, 2, 3)
-             
-             # Apply Rotation
-             # tips_local shape: (B, T, 2, 3)
-             # rot_mat shape: (B, T, 3, 3)
-             # _rot6d_to_mat returns row-stacked basis vectors (Local -> Global)
-             # Correct transformation is v_global = v_local @ R + pos
-             
              tips_global = torch.matmul(tips_local, rot_mat) # (B, T, 2, 3)
-             
-             # Add Position
              tips_global += pos.unsqueeze(2)
              
              return tips_global # (B, T, 2, 3)
          
-        # Left Arm (0-9)
-        l_pos = pose_18d[..., 0:3]
-        l_rot = pose_18d[..., 3:9]
-        l_grip = torch.ones((B, T), device=pose_18d.device)
+        # --- Prepare Adaptive Gripper Mapping ---
+        scale_vec = torch.ones(20, device=pose_20d.device, dtype=pose_20d.dtype)
+        offset_vec = torch.zeros(20, device=pose_20d.device, dtype=pose_20d.dtype)
+        use_norm = False
+        
+        if hasattr(self, 'normalizer') and 'target_keypose' in self.normalizer.params_dict:
+             params = self.normalizer['target_keypose'].params_dict
+             if 'scale' in params and 'offset' in params:
+                 # params on cpu usually, move to device
+                 s = params['scale'].to(pose_20d.device)
+                 o = params['offset'].to(pose_20d.device)
+                 if s.ndim > 1: s = s.view(-1)
+                 if o.ndim > 1: o = o.view(-1)
+                 if len(s) == 20:
+                     scale_vec = s
+                     offset_vec = o
+                     use_norm = True
+
+        def get_adaptive_grip(raw_val, idx):
+             # Default: (val + 1) / 2
+             val = (raw_val + 1.0) * 0.5
+             if use_norm:
+                 s = scale_vec[idx]
+                 o = offset_vec[idx]
+                 
+                 norm_val = raw_val * s + o
+                 # Heuristic: if min_est > max_est (in magnitude), invert
+                 min_est = (-1.0 - o) / (s + 1e-6)
+                 max_est = (1.0 - o) / (s + 1e-6)
+                 
+                 if torch.abs(min_est) > torch.abs(max_est):
+                     return 1.0 - val # Invert
+             return val
+
+        # Left Arm (0-10)
+        l_pos = pose_20d[..., 0:3]
+        l_rot = pose_20d[..., 3:9]
+        l_grip_raw = pose_20d[..., 9:10].squeeze(-1) # (B, T)
+        
+        l_grip = get_adaptive_grip(l_grip_raw, 9).clip(0, 1)
         beacons_left = process_gripper(l_pos, l_rot, l_grip)
         
-        # Right Arm (9-18)
-        r_pos = pose_18d[..., 9:12]
-        r_rot = pose_18d[..., 12:18]
-        r_grip = torch.ones((B, T), device=pose_18d.device)
+        # Right Arm (10-20)
+        r_pos = pose_20d[..., 10:13]
+        r_rot = pose_20d[..., 13:19]
+        r_grip_raw = pose_20d[..., 19:20].squeeze(-1)
+        
+        r_grip = get_adaptive_grip(r_grip_raw, 19).clip(0, 1)
         beacons_right = process_gripper(r_pos, r_rot, r_grip)
         
         return beacons_left, beacons_right
@@ -273,13 +291,52 @@ class GHOSTBeaconPolicy(BasePolicy):
         B, T, D = agent_pos.shape
         states_list = [] 
         
+        # Try to use normalizer for adaptive gripper scaling
+        scale_vec = torch.ones(D, device=agent_pos.device, dtype=agent_pos.dtype)
+        offset_vec = torch.zeros(D, device=agent_pos.device, dtype=agent_pos.dtype)
+        use_norm = False
+        
+        if hasattr(self, 'normalizer') and 'agent_pos' in self.normalizer.params_dict:
+             params = self.normalizer['agent_pos'].params_dict
+             if 'scale' in params and 'offset' in params:
+                 scale_vec = params['scale'].to(agent_pos.device)
+                 offset_vec = params['offset'].to(agent_pos.device)
+                 if scale_vec.ndim > 1: scale_vec = scale_vec.view(-1)
+                 if offset_vec.ndim > 1: offset_vec = offset_vec.view(-1)
+                 use_norm = True
+
         if D == 32:
-             left_gripper_val = agent_pos[..., 6].clip(0, 1) 
+             # Left (Index 6)
+             left_val = agent_pos[..., 6]
+             if use_norm:
+                 s, o = scale_vec[6], offset_vec[6]
+                 norm_val = left_val * s + o
+                 # Heuristic: Value closer to 0 is "Closed"
+                 min_est = (-1.0 - o) / (s + 1e-6)
+                 max_est = (1.0 - o) / (s + 1e-6)
+                 if torch.abs(min_est) > torch.abs(max_est):
+                     left_val = 1.0 - (norm_val + 1.0) * 0.5
+                 else:
+                     left_val = (norm_val + 1.0) * 0.5
+             left_gripper_val = left_val.clip(0, 1) 
+             
              left_pos = agent_pos[..., 14:17] 
              left_rot6d = agent_pos[..., 17:23] 
              states_list.append((left_pos, left_rot6d, left_gripper_val))
              
-             right_gripper_val = agent_pos[..., 13].clip(0, 1) 
+             # Right (Index 13)
+             right_val = agent_pos[..., 13]
+             if use_norm:
+                 s, o = scale_vec[13], offset_vec[13]
+                 norm_val = right_val * s + o
+                 min_est = (-1.0 - o) / (s + 1e-6)
+                 max_est = (1.0 - o) / (s + 1e-6)
+                 if torch.abs(min_est) > torch.abs(max_est):
+                     right_val = 1.0 - (norm_val + 1.0) * 0.5
+                 else:
+                     right_val = (norm_val + 1.0) * 0.5
+             right_gripper_val = right_val.clip(0, 1) 
+             
              right_pos = agent_pos[..., 23:26]
              right_rot6d = agent_pos[..., 26:32]
              states_list.append((right_pos, right_rot6d, right_gripper_val))
@@ -436,9 +493,35 @@ class GHOSTBeaconPolicy(BasePolicy):
             else:
                 beacons_vec_for_heat = gt_vec_12d
 
+            # 修正：直接在物理空间加噪，避免 Normalized Space Scale 导致的变形
+             # Note: beacons_vec_for_heat is NORMALIZED (based on point_cloud scale if available)
+            # Reconstruct RAW beacons -> Add Raw Noise -> Normalize back
             if self.training and self.keyframe_noise_std > 0:
-                noise = torch.randn_like(beacons_vec_for_heat) * self.keyframe_noise_std
-                beacons_vec_for_heat = beacons_vec_for_heat + noise
+                if 'point_cloud' in self.normalizer.params_dict:
+                    params = self.normalizer['point_cloud'].params_dict
+                    scale = params['scale'].to(beacons_vec_for_heat.device)
+                    offset = params['offset'].to(beacons_vec_for_heat.device)
+                    
+                    # scale is typically (3,) or (6,). We just need first 3 for XYZ.
+                    scale_xyz = scale[:3].view(1, 1, 3) 
+                    offset_xyz = offset[:3].view(1, 1, 3)
+                    
+                    # Beacons are (B, T, 12). Reshape to (B, T, 4, 3) to apply scale/offset cleanly
+                    # 4 points: L1, L2, R1, R2
+                    beacons_reshaped = rearrange(beacons_vec_for_heat, 'b t (n c) -> b t n c', n=4, c=3)
+                    
+                    # Unnormalize
+                    beacons_raw = (beacons_reshaped - offset_xyz) / scale_xyz
+                    
+                    # Add Raw Noise
+                    noise = torch.randn_like(beacons_raw) * self.keyframe_noise_std
+                    beacons_raw_noisy = beacons_raw + noise
+                    
+                    # Re-Normalize
+                    beacons_norm_noisy = beacons_raw_noisy * scale_xyz + offset_xyz
+                    
+                    # Reshape back to (B, T, 12)
+                    beacons_vec_for_heat = rearrange(beacons_norm_noisy, 'b t n c -> b t (n c)')
             
             # Reshape back to (B, T, 2, 3)
             # 12D = [L_p1(3), L_p2(3), R_p1(3), R_p2(3)]

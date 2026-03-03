@@ -92,6 +92,11 @@ def visualize_dataset_dynamic(zarr_path, episode_idx=0, save_video=False):
         aux_radius=0.01,
     )
     
+    # Fit Normalizer (Crucial for correct gripper scaling)
+    print("Fitting normalizer to support correct gripper visualization...")
+    normalizer = dataset.get_normalizer()
+    policy.set_normalizer(normalizer)
+    
     # Video writer setup
     video_writer = None
     fps = 30
@@ -119,6 +124,13 @@ def visualize_dataset_dynamic(zarr_path, episode_idx=0, save_video=False):
     # 4. 动态循环播放
     print("\n=== Starting Dynamic Visualization ===")
     print("Press 'q' or ESC to quit")
+    
+    # 自动计算视图中心 (基于场景点云的均值)
+    # 只要有一帧计算过就行，不用每帧变
+    center_x = 0.5 # Default slightly forward
+    center_y = 0.0 
+    center_z = 0.4
+    center_calculated = False
     
     for i in range(start_idx, end_idx):
         # 从dataset获取样本(Dataset返回的是原始数据，未归一化)
@@ -188,18 +200,16 @@ def visualize_dataset_dynamic(zarr_path, episode_idx=0, save_video=False):
         combined_xyz = np.vstack([scene_xyz, aux_pts])
         combined_rgb = np.vstack([scene_rgb, aux_cols])
         
-        # 自动计算视图中心 (基于场景点云的均值)
-        # 只要有一帧计算过就行，不用每帧变
-        center_x = 0.0
-        center_y = 0.0 
-        center_z = 0.5
-        
-        # 简单过滤离群值
-        valid_mask = (scene_xyz[:, 2] > -0.5) & (scene_xyz[:, 2] < 1.5)
-        if valid_mask.any():
-            center_x = np.mean(scene_xyz[valid_mask, 0])
-            center_y = np.mean(scene_xyz[valid_mask, 1])
-            center_z = np.mean(scene_xyz[valid_mask, 2])
+        # 只在第一帧计算视图中心，后续锁定，防止画面抖动
+        if not center_calculated:
+            # 简单过滤离群值
+            valid_mask = (scene_xyz[:, 2] > -0.5) & (scene_xyz[:, 2] < 1.5)
+            if valid_mask.any():
+                center_x = np.mean(scene_xyz[valid_mask, 0])
+                center_y = np.mean(scene_xyz[valid_mask, 1])
+                center_z = np.mean(scene_xyz[valid_mask, 2])
+                print(f"Locked View Center at: [{center_x:.3f}, {center_y:.3f}, {center_z:.3f}]")
+                center_calculated = True
             
         def render_view(x, y, colors, img_size, label, cx, cy):
             img = np.full((img_size, img_size, 3), 50, dtype=np.uint8)
@@ -310,7 +320,7 @@ def visualize_dataset_dynamic(zarr_path, episode_idx=0, save_video=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize GHOST Dataset with Aux Points Dynamically")
     parser.add_argument("--zarr_path", type=str, 
-                        default="policy/VGC/data/stack_blocks_two-demo_3d_vision_hard-100-ppi.zarr",
+                        default="/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets_zarr/pick_place_d405.zarr",
                         help="Path to zarr dataset")
     parser.add_argument("--episode", type=int, default=0, help="Episode index")
     parser.add_argument("--save_video", type=bool, default=True, help="Save as MP4 video")

@@ -44,12 +44,13 @@ def draw_text(img, text, position, font_scale=0.5, color=(255, 255, 255), thickn
     return img
 
 
-def create_action_panel(action, width=640, height=200):
+def create_info_panel(state, action, width=1920, height=240):
     """
-    创建action信息面板
+    创建状态和动作信息面板
     
     Args:
-        action: (14,) action数组
+        state: (14,) 状态数组(qpos)
+        action: (14,) 动作数组
         width, height: 面板尺寸
         
     Returns:
@@ -58,30 +59,52 @@ def create_action_panel(action, width=640, height=200):
     panel = np.zeros((height, width, 3), dtype=np.uint8)
     panel[:] = (40, 40, 40)  # 深灰色背景
     
-    # 绘制标题
-    draw_text(panel, "Action Values (14-DoF)", (10, 25), 
+    mid_x = width // 2
+
+    # =============== STATE =================
+    draw_text(panel, "State Values / qpos (14-DoF)", (10, 25), 
               font_scale=0.7, color=(0, 255, 255), thickness=2)
     
-    # 绘制左臂数据 (0-6)
-    y_offset = 50
-    draw_text(panel, "Left Arm:", (10, y_offset), 
-              font_scale=0.6, color=(100, 255, 100), thickness=1)
+    # 左臂状态 (0-6)
+    y_offset = 60
+    draw_text(panel, "Left Arm State:", (10, y_offset), font_scale=0.6, color=(100, 255, 100), thickness=1)
     for i in range(7):
-        text = f"{i}: {action[i]:+.3f}"
-        x_pos = 10 + (i % 4) * 150
-        y_pos = y_offset + 25 + (i // 4) * 25
-        color = (255, 200, 100) if i == 6 else (255, 255, 255)  # 夹爪用橙色
+        text = f"{i}: {state[i]:+.3f}"
+        x_pos = 10 + (i % 7) * 125
+        y_pos = y_offset + 30
+        color = (255, 200, 100) if i == 6 else (255, 255, 255)
         draw_text(panel, text, (x_pos, y_pos), font_scale=0.5, color=color)
     
-    # 绘制右臂数据 (7-13)
-    y_offset = 125
-    draw_text(panel, "Right Arm:", (10, y_offset), 
-              font_scale=0.6, color=(100, 100, 255), thickness=1)
+    # 右臂状态 (7-13)
+    y_offset = 140
+    draw_text(panel, "Right Arm State:", (10, y_offset), font_scale=0.6, color=(100, 100, 255), thickness=1)
+    for i in range(7, 14):
+        text = f"{i}: {state[i]:+.3f}"
+        x_pos = 10 + ((i-7) % 7) * 125
+        y_pos = y_offset + 30
+        color = (255, 200, 100) if i == 13 else (255, 255, 255)
+        draw_text(panel, text, (x_pos, y_pos), font_scale=0.5, color=color)
+        
+    # =============== ACTION =================
+    draw_text(panel, "Action Values (14-DoF)", (mid_x + 10, 25), 
+              font_scale=0.7, color=(0, 255, 255), thickness=2)
+    
+    y_offset = 60
+    draw_text(panel, "Left Arm Action:", (mid_x + 10, y_offset), font_scale=0.6, color=(100, 255, 100), thickness=1)
+    for i in range(7):
+        text = f"{i}: {action[i]:+.3f}"
+        x_pos = mid_x + 10 + (i % 7) * 125
+        y_pos = y_offset + 30
+        color = (255, 200, 100) if i == 6 else (255, 255, 255)
+        draw_text(panel, text, (x_pos, y_pos), font_scale=0.5, color=color)
+    
+    y_offset = 140
+    draw_text(panel, "Right Arm Action:", (mid_x + 10, y_offset), font_scale=0.6, color=(100, 100, 255), thickness=1)
     for i in range(7, 14):
         text = f"{i}: {action[i]:+.3f}"
-        x_pos = 10 + ((i-7) % 4) * 150
-        y_pos = y_offset + 25 + ((i-7) // 4) * 25
-        color = (255, 200, 100) if i == 13 else (255, 255, 255)  # 夹爪用橙色
+        x_pos = mid_x + 10 + ((i-7) % 7) * 125
+        y_pos = y_offset + 30
+        color = (255, 200, 100) if i == 13 else (255, 255, 255)
         draw_text(panel, text, (x_pos, y_pos), font_scale=0.5, color=color)
     
     return panel
@@ -104,12 +127,14 @@ def visualize_episode(hdf5_path, fps=10, start_frame=0):
         left_images = f['observations/images/left_wrist'][()]
         right_images = f['observations/images/right_wrist'][()]
         actions = f['action'][()]  # (T, 14)
+        states = f['observations/qpos'][()]  # 读取状态(qpos) (T, 14)
         
         total_frames = len(actions)
         print(f"✅ 数据加载完成")
         print(f"   总帧数: {total_frames}")
         print(f"   图像形状: {head_images.shape}")
         print(f"   动作形状: {actions.shape}")
+        print(f"   状态形状: {states.shape}")
         print(f"\n控制说明:")
         print("   空格键: 暂停/继续")
         print("   →键: 下一帧")
@@ -157,13 +182,13 @@ def visualize_episode(hdf5_path, fps=10, start_frame=0):
             # 水平拼接三个视角
             top_row = np.hstack([head_img, left_img, right_img])
             
-            # 创建action面板
-            action_panel = create_action_panel(actions[frame_idx], 
+            # 创建信息面板 (含有state和action)
+            info_panel = create_info_panel(states[frame_idx], actions[frame_idx], 
                                               width=top_row.shape[1], 
                                               height=240)
             
             # 垂直拼接
-            display = np.vstack([top_row, action_panel])
+            display = np.vstack([top_row, info_panel])
             
             # 添加播放状态提示
             status = "PAUSED" if paused else "PLAYING"
@@ -204,7 +229,7 @@ def visualize_episode(hdf5_path, fps=10, start_frame=0):
 
 def main():
     parser = argparse.ArgumentParser(description="可视化HDF5数据集")
-    parser.add_argument("--file", type=str, default="datasets/pick_place_d405/episode_16.hdf5",  # /home/arx/ROS2_AC-one_Play/act/datasets_fixed/episode_0.hdf5
+    parser.add_argument("--file", type=str, default="datasets/pick_place_d405/episode_4.hdf5",  # /home/arx/ROS2_AC-one_Play/act/datasets_fixed/episode_0.hdf5
                        help="HDF5文件路径")                                       # datasets/episode_0.hdf5
     parser.add_argument("--fps", type=int, default=10, 
                        help="播放帧率")

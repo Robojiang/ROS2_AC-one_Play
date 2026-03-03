@@ -19,17 +19,17 @@ sys.path.insert(0, os.path.join(BASE_DIR, "code_tools"))
 
 # 导入GPU生成器 (从convert_hdf5_to_zarr.py)
 from convert_hdf5_to_zarr import (
-    GPUPointCloudGenerator,
     load_intrinsics,
     load_calibration_matrix,
     eef_to_matrix,
     decode_jpeg
 )
+from inference_utils.pointcloud_generator import PointCloudGenerator
 
 # 配置
 CALIBRATION_DIR = os.path.join(BASE_DIR, "calibration_results")
 DATASETS_DIR = os.path.join(BASE_DIR, "datasets")
-TEST_EPISODE = os.path.join(DATASETS_DIR, "episode_0.hdf5")
+TEST_EPISODE = os.path.join(DATASETS_DIR, "pick_place_d405/episode_4.hdf5")
 NUM_FRAMES_TEST = 50  # 测试50帧
 
 def load_test_data():
@@ -98,9 +98,8 @@ def benchmark_gpu():
     if device == 'cuda':
         print(f"GPU: {torch.cuda.get_device_name(0)}")
     
-    generator = GPUPointCloudGenerator(
+    generator = PointCloudGenerator(
         intrinsics=intrinsics,
-        downsample_size=(160, 120),
         device=device
     )
     
@@ -110,7 +109,7 @@ def benchmark_gpu():
         left_eef = data['eef'][i, :7]
         right_eef = data['eef'][i, 7:14]
         
-        generator.generate_frame(
+        generator.generate(
             head_depth=data['head_depths'][i],
             head_color=data['head_images'][i],
             left_depth=data['left_depths'][i],
@@ -119,17 +118,12 @@ def benchmark_gpu():
             right_color=data['right_images'][i],
             left_eef=left_eef,
             right_eef=right_eef,
+            intrinsics=intrinsics,
             T_H_LB=T_H_LB,
             T_H_RB=T_H_RB,
             T_LE_LC=T_LE_LC,
             T_RE_RC=T_RE_RC,
-            T_LB_H=T_LB_H,
-            max_depth_head=1.0,
-            max_depth_hand=0.6,
-            use_workspace_crop=True,
-            workspace_x_range=[-0.4, 0.5],
-            workspace_y_range=[-0.5, 3.0],
-            workspace_z_range=[-0.2, 1.0]
+            T_LB_H=T_LB_H
         )
     
     # 正式测试
@@ -140,7 +134,7 @@ def benchmark_gpu():
         left_eef = data['eef'][i, :7]
         right_eef = data['eef'][i, 7:14]
         
-        pc = generator.generate_frame(
+        pc, _ = generator.generate(
             head_depth=data['head_depths'][i],
             head_color=data['head_images'][i],
             left_depth=data['left_depths'][i],
@@ -149,17 +143,12 @@ def benchmark_gpu():
             right_color=data['right_images'][i],
             left_eef=left_eef,
             right_eef=right_eef,
+            intrinsics=intrinsics,
             T_H_LB=T_H_LB,
             T_H_RB=T_H_RB,
             T_LE_LC=T_LE_LC,
             T_RE_RC=T_RE_RC,
-            T_LB_H=T_LB_H,
-            max_depth_head=1.0,
-            max_depth_hand=0.6,
-            use_workspace_crop=True,
-            workspace_x_range=[-0.4, 0.5],
-            workspace_y_range=[-0.5, 3.0],
-            workspace_z_range=[-0.2, 1.0]
+            T_LB_H=T_LB_H
         )
         
         if i == 0:

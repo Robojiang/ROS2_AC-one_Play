@@ -117,13 +117,13 @@ class GHOSTKeyframePolicy(BasePolicy):
                 self.keyframe_encoder = PointNet2Encoder(**enc_cfg_p1)
                 
             self.keyframe_feature_dim = enc_cfg_p1.get('out_channels', 1024)
-            # Head to predict 18D Pose (Left 9 + Right 9)
+            # Head to predict 20D Pose (Left 10: [3D Pos, 6D Rot, 1D Grip], Right 10)
             self.keyframe_head = nn.Sequential(
                 nn.Linear(self.keyframe_feature_dim, 256),
                 nn.Mish(),
-                nn.Linear(256, 18) # 18D Keypose
+                nn.Linear(256, 20) # 20D Keypose with Gripper
             )
-            cprint("[GHOSTKeyframePolicy] Keyframe Prediction Module Enabled (P1)", "yellow")
+            cprint("[GHOSTKeyframePolicy] Keyframe Prediction Module Enabled (P1) -> Output 20D", "yellow")
 
         # 3. Diffusion Model
         # Input to diffusion is action + condition (if not global)
@@ -184,29 +184,78 @@ class GHOSTKeyframePolicy(BasePolicy):
         b3 = torch.cross(b1, b2, dim=-1)
         return torch.stack([b1, b2, b3], dim=-2)
     
-    def _generate_trident_from_pose(self, pose_18d):
+    def _generate_trident_from_pose(self, pose_20d):
         """
         Generate auxiliary points (Trident) for the keyframe pose.
-        pose_18d: (B, T, 18) [Left 9D, Right 9D] or (B, 18)
-        Returns: 
-           points: (B, T, num_aux, 3) XYZ coordinates
+        pose_20d: (B, T, 20) [Left 10D, Right 10D] or (B, 20)
+        Left 10D: [Pos(3), Rot6D(6), Grip(1)]
         """
-        if pose_18d.dim() == 2:
-            pose_18d = pose_18d.unsqueeze(1)
+        if pose_20d.dim() == 2:
+            pose_20d = pose_20d.unsqueeze(1)
             
-        B, T, _ = pose_18d.shape
+        B, T, _ = pose_20d.shape
         states_list = []
         
-        # Left: 0-9
-        left_pos = pose_18d[..., 0:3]
-        left_rot = pose_18d[..., 3:9]
-        left_grip = torch.ones((B, T), device=pose_18d.device) # Default open for shadow
+        # --- Handle Gripper Normalization ---
+        # Note: Input `pose_20d` is RAW (unnormalized)
+        # But we need to reverse adaptive mapping if normalization was used on raw gripper
+        
+        # We can reuse the `agent_pos` logic if we assume `target_keypose` was constructed from `agent_pos` format?
+        # Actually `target_keypose` in dataset is constructed from `state` (raw).
+        # Normalizer fits on `target_keypose`.
+        # So we should look for `target_keypose` params in normalizer.
+        
+        scale_vec = torch.ones(20, device=pose_20d.device, dtype=pose_20d.dtype)
+        offset_vec = torch.zeros(20, device=pose_20d.device, dtype=pose_20d.dtype)
+        use_norm = False
+        
+        if hasattr(self, 'normalizer') and 'target_keypose' in self.normalizer.params_dict:
+             params = self.normalizer['target_keypose'].params_dict
+             if 'scale' in params and 'offset' in params:
+                 scale_vec = params['scale'].to(pose_20d.device)
+                 offset_vec = params['offset'].to(pose_20d.device)
+                 if scale_vec.ndim > 1: scale_vec = scale_vec.view(-1)
+                 if offset_vec.ndim > 1: offset_vec = offset_vec.view(-1)
+                 use_norm = True
+
+        # Left: 0-10
+        left_pos = pose_20d[..., 0:3]
+        left_rot = pose_20d[..., 3:9]
+        left_raw_grip = pose_20d[..., 9] # (B, T)
+        
+        left_grip = left_raw_grip
+        if use_norm:
+             # Apply same heuristic as agent_pos
+             s, o = scale_vec[9], offset_vec[9]
+             norm_val = left_raw_grip * s + o
+             min_est = (-1.0 - o) / (s + 1e-6)
+             max_est = (1.0 - o) / (s + 1e-6)
+             if torch.abs(min_est) > torch.abs(max_est):
+                 left_grip = 1.0 - (norm_val + 1.0) * 0.5
+             else:
+                 left_grip = (norm_val + 1.0) * 0.5
+        left_grip = left_grip.clip(0, 1)
+
         states_list.append((left_pos, left_rot, left_grip))
         
-        # Right: 9-18
-        right_pos = pose_18d[..., 9:12]
-        right_rot = pose_18d[..., 12:18]
-        right_grip = torch.ones((B, T), device=pose_18d.device)
+        # Right: 10-20
+        right_pos = pose_20d[..., 10:13]
+        right_rot = pose_20d[..., 13:19]
+        right_raw_grip = pose_20d[..., 19]
+        
+        right_grip = right_raw_grip
+        if use_norm:
+             s, o = scale_vec[19], offset_vec[19]
+             norm_val = right_raw_grip * s + o
+             min_est = (-1.0 - o) / (s + 1e-6)
+             max_est = (1.0 - o) / (s + 1e-6)
+             # Same check
+             if torch.abs(min_est) > torch.abs(max_est):
+                 right_grip = 1.0 - (norm_val + 1.0) * 0.5
+             else:
+                 right_grip = (norm_val + 1.0) * 0.5
+        right_grip = right_grip.clip(0, 1)
+        
         states_list.append((right_pos, right_rot, right_grip))
         
         output_pcs = []
@@ -215,16 +264,16 @@ class GHOSTKeyframePolicy(BasePolicy):
         n_center = int(self.aux_point_num * 0.5)
         n_side = (self.aux_point_num - n_center) // 2
         
-        dists_c = torch.linspace(0, self.aux_length, n_center, device=pose_18d.device, dtype=pose_18d.dtype)
+        dists_c = torch.linspace(0, self.aux_length, n_center, device=pose_20d.device, dtype=pose_20d.dtype)
         pts_c = torch.stack([dists_c, torch.zeros_like(dists_c), torch.zeros_like(dists_c)], dim=-1)
-        angle_c = torch.rand(n_center, device=pose_18d.device, dtype=pose_18d.dtype) * 2 * np.pi
-        rad_c = torch.rand(n_center, device=pose_18d.device, dtype=pose_18d.dtype) * self.aux_radius
+        angle_c = torch.rand(n_center, device=pose_20d.device, dtype=pose_20d.dtype) * 2 * np.pi
+        rad_c = torch.rand(n_center, device=pose_20d.device, dtype=pose_20d.dtype) * self.aux_radius
         pts_c += torch.stack([torch.zeros_like(dists_c), rad_c*torch.cos(angle_c), rad_c*torch.sin(angle_c)], dim=-1)
         
-        dists_s = torch.linspace(0, self.aux_trident_side_len, n_side, device=pose_18d.device, dtype=pose_18d.dtype)
+        dists_s = torch.linspace(0, self.aux_trident_side_len, n_side, device=pose_20d.device, dtype=pose_20d.dtype)
         base_s = torch.stack([dists_s, torch.zeros_like(dists_s), torch.zeros_like(dists_s)], dim=-1)
-        angle_s = torch.rand(n_side, device=pose_18d.device, dtype=pose_18d.dtype) * 2 * np.pi
-        rad_s = torch.rand(n_side, device=pose_18d.device, dtype=pose_18d.dtype) * self.aux_radius
+        angle_s = torch.rand(n_side, device=pose_20d.device, dtype=pose_20d.dtype) * 2 * np.pi
+        rad_s = torch.rand(n_side, device=pose_20d.device, dtype=pose_20d.dtype) * self.aux_radius
         noise_s = torch.stack([torch.zeros_like(dists_s), rad_s*torch.cos(angle_s), rad_s*torch.sin(angle_s)], dim=-1)
         base_s_noisy = base_s + noise_s
         
@@ -257,22 +306,60 @@ class GHOSTKeyframePolicy(BasePolicy):
         B, T, D = agent_pos.shape
         states_list = [] # List of tuples (pos, rot6d, gripper_width)
         
-        if D == 32:
-             left_gripper_val = agent_pos[..., 6].clip(0, 1) # (B, T)
-             left_pos = agent_pos[..., 14:17] # (B, T, 3)
-             left_rot6d = agent_pos[..., 17:23] # (B, T, 6)
-             states_list.append((left_pos, left_rot6d, left_gripper_val))
+        # Try to use normalizer to adaptively scale gripper value to [0, 1]
+        scale_vec = torch.ones(D, device=agent_pos.device, dtype=agent_pos.dtype)
+        offset_vec = torch.zeros(D, device=agent_pos.device, dtype=agent_pos.dtype)
+        use_norm = False
+        
+        if hasattr(self, 'normalizer') and 'agent_pos' in self.normalizer.params_dict:
+             params = self.normalizer['agent_pos'].params_dict
+             # Check if scale/offset exist (they should if fit)
+             if 'scale' in params and 'offset' in params:
+                 scale_vec = params['scale'].to(agent_pos.device) # (D,) or (1, D)
+                 offset_vec = params['offset'].to(agent_pos.device)
+                 if scale_vec.ndim > 1: scale_vec = scale_vec.view(-1)
+                 if offset_vec.ndim > 1: offset_vec = offset_vec.view(-1)
+                 use_norm = True
+        
+        # Left Gripper (Index 6)
+        left_val = agent_pos[..., 6]
+        if use_norm:
+             s, o = scale_vec[6], offset_vec[6]
+             norm_val = left_val * s + o
+             # Heuristic: Value closer to 0 is "Closed" (Width=0)
+             # Reconstruct min/max from Normalizer scaling y = x*s + o => x = (y-o)/s
+             min_est = (-1.0 - o) / (s + 1e-6)
+             max_est = (1.0 - o) / (s + 1e-6)
              
-             right_gripper_val = agent_pos[..., 13].clip(0, 1) # (B, T)
-             right_pos = agent_pos[..., 23:26]
-             right_rot6d = agent_pos[..., 26:32]
-             states_list.append((right_pos, right_rot6d, right_gripper_val))
-        else:
-             if D >= 9:
-                 pos = agent_pos[..., -9:-6]
-                 rot = agent_pos[..., -6:]
-                 gripper = torch.ones((B, T), device=agent_pos.device, dtype=agent_pos.dtype)
-                 states_list.append((pos, rot, gripper))
+             # Map normalized [-1, 1] to [0, 1] (Width Ratio)
+             # If Min is further from 0 (e.g. -0.08 vs 0), Min is likely Open -> Invert
+             if torch.abs(min_est) > torch.abs(max_est):
+                 left_val = 1.0 - (norm_val + 1.0) * 0.5
+             else:
+                 left_val = (norm_val + 1.0) * 0.5
+        left_gripper_val = left_val.clip(0, 1) # (B, T)
+        
+        left_pos = agent_pos[..., 14:17] # (B, T, 3)
+        left_rot6d = agent_pos[..., 17:23] # (B, T, 6)
+        states_list.append((left_pos, left_rot6d, left_gripper_val))
+        
+        # Right Gripper (Index 13)
+        right_val = agent_pos[..., 13]
+        if use_norm:
+             s, o = scale_vec[13], offset_vec[13]
+             norm_val = right_val * s + o
+             min_est = (-1.0 - o) / (s + 1e-6)
+             max_est = (1.0 - o) / (s + 1e-6)
+             
+             if torch.abs(min_est) > torch.abs(max_est):
+                 right_val = 1.0 - (norm_val + 1.0) * 0.5
+             else:
+                 right_val = (norm_val + 1.0) * 0.5
+        right_gripper_val = right_val.clip(0, 1) # (B, T)
+        
+        right_pos = agent_pos[..., 23:26]
+        right_rot6d = agent_pos[..., 26:32]
+        states_list.append((right_pos, right_rot6d, right_gripper_val))
 
         if not states_list:
             return torch.zeros((B, T, 0, 3), device=agent_pos.device)
@@ -389,6 +476,7 @@ class GHOSTKeyframePolicy(BasePolicy):
             
             # Loss for P1
             target_keypose_norm = nobs['target_keypose']
+            # We must expect target_keypose_norm to be 20D now
             loss_p1 = F.mse_loss(pred_keypose_norm, target_keypose_norm)
             loss_dict['loss_keyframe'] = loss_p1.item()
             
@@ -405,13 +493,14 @@ class GHOSTKeyframePolicy(BasePolicy):
             else:
                 shadow_pose_norm = target_keypose_norm
                 
+            shadow_pose_raw = self.normalizer['target_keypose'].unnormalize(shadow_pose_norm)
+
             # Add noise to keyframe (whether predicted or GT) during training
             # This helps the policy be robust to keyframe prediction errors (or prevent overfitting to perfect predictions)
+            # 修正：直接在物理空间 (Raw Space) 添加各向同性的噪声，避免因维度归一化Scale差异导致的非物理抖动
             if self.training and self.keyframe_noise_std > 0:
-                noise = torch.randn_like(shadow_pose_norm) * self.keyframe_noise_std
-                shadow_pose_norm = shadow_pose_norm + noise
-            
-            shadow_pose_raw = self.normalizer['target_keypose'].unnormalize(shadow_pose_norm)
+                noise = torch.randn_like(shadow_pose_raw) * self.keyframe_noise_std
+                shadow_pose_raw = shadow_pose_raw + noise
             
             shadow_xyz = self._generate_trident_from_pose(shadow_pose_raw)
             

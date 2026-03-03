@@ -166,18 +166,53 @@ class GHOSTPolicy(BasePolicy):
         B, T, D = agent_pos.shape
         states_list = [] # List of tuples (pos, rot6d, gripper_width)
         
+        # Try to use normalizer for adaptive gripper scaling
+        scale_vec = torch.ones(D, device=agent_pos.device, dtype=agent_pos.dtype)
+        offset_vec = torch.zeros(D, device=agent_pos.device, dtype=agent_pos.dtype)
+        use_norm = False
+        
+        if hasattr(self, 'normalizer') and 'agent_pos' in self.normalizer.params_dict:
+             params = self.normalizer['agent_pos'].params_dict
+             if 'scale' in params and 'offset' in params:
+                 scale_vec = params['scale'].to(agent_pos.device)
+                 offset_vec = params['offset'].to(agent_pos.device)
+                 if scale_vec.ndim > 1: scale_vec = scale_vec.view(-1)
+                 if offset_vec.ndim > 1: offset_vec = offset_vec.view(-1)
+                 use_norm = True
+
         # Parse Agent Pos (VGC Format: 32D = 14 Joint + 9 Left + 9 Right)
         if D == 32:
-             # Left Hand
-             # Joint State: 0-14. Left indices usually 0-6 joints, 6 gripper.
-             left_gripper_val = agent_pos[..., 6].clip(0, 1) # (B, T)
+             # Left Hand (Index 6)
+             left_val = agent_pos[..., 6]
+             if use_norm:
+                 s, o = scale_vec[6], offset_vec[6]
+                 norm_val = left_val * s + o
+                 # Heuristic: Value closer to 0 is "Closed" (Width=0)
+                 min_est = (-1.0 - o) / (s + 1e-6)
+                 max_est = (1.0 - o) / (s + 1e-6)
+                 if torch.abs(min_est) > torch.abs(max_est):
+                     left_val = 1.0 - (norm_val + 1.0) * 0.5
+                 else:
+                     left_val = (norm_val + 1.0) * 0.5
+             left_gripper_val = left_val.clip(0, 1)
+             
              left_pos = agent_pos[..., 14:17] # (B, T, 3)
              left_rot6d = agent_pos[..., 17:23] # (B, T, 6)
              states_list.append((left_pos, left_rot6d, left_gripper_val))
              
-             # Right Hand
-             # Right indices usually 7-13 joints, 13 gripper.
-             right_gripper_val = agent_pos[..., 13].clip(0, 1) # (B, T)
+             # Right Hand (Index 13)
+             right_val = agent_pos[..., 13]
+             if use_norm:
+                 s, o = scale_vec[13], offset_vec[13]
+                 norm_val = right_val * s + o
+                 min_est = (-1.0 - o) / (s + 1e-6)
+                 max_est = (1.0 - o) / (s + 1e-6)
+                 if torch.abs(min_est) > torch.abs(max_est):
+                     right_val = 1.0 - (norm_val + 1.0) * 0.5
+                 else:
+                     right_val = (norm_val + 1.0) * 0.5
+             right_gripper_val = right_val.clip(0, 1)
+
              right_pos = agent_pos[..., 23:26]
              right_rot6d = agent_pos[..., 26:32]
              states_list.append((right_pos, right_rot6d, right_gripper_val))

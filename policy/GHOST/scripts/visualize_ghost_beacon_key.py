@@ -87,7 +87,7 @@ def visualize_beacon_key_policy(zarr_path, episode_idx=0, save_video=False):
         aux_point_num=200, 
         aux_length=0.2,
         beacon_sigma=0.3, # Sigma parameter
-        keyframe_noise_std=0.03, # Noise for viz
+        keyframe_noise_std=0.01, # Noise for viz
         use_keyframe_prediction=True
     )
     
@@ -170,12 +170,13 @@ def visualize_beacon_key_policy(zarr_path, episode_idx=0, save_video=False):
             # B. Generate P2 Input Geometry (Ghost Trident)
             # ------------------------------------------------
             # Simulate prediction: Normalize -> Add Noise -> Unnormalize
-            if 'target_keypose' in policy.normalizer.params_dict:
-                kp_norm = policy.normalizer['target_keypose'].normalize(target_keypose)
-                kp_norm = kp_norm + torch.randn_like(kp_norm) * policy.keyframe_noise_std
-                kp_raw = policy.normalizer['target_keypose'].unnormalize(kp_norm)
-            else:
-                kp_raw = target_keypose
+            # 修正：直接在物理空间 (Raw Space) 添加各向同性的噪声
+            # target_keypose 是 Raw 数据 (1, 1, 18)
+            kp_raw = target_keypose.clone()
+            
+            if policy.keyframe_noise_std > 0:
+                noise = torch.randn_like(kp_raw) * policy.keyframe_noise_std
+                kp_raw = kp_raw + noise
                 
             ghost_aux = policy._generate_trident_from_pose(kp_raw) # (1, 1, K, 3) RAW
             
@@ -292,7 +293,7 @@ def visualize_beacon_key_policy(zarr_path, episode_idx=0, save_video=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--zarr_path", type=str, 
-                        default="policy/VGC/data/stack_blocks_two-demo_3d_vision_hard-100-ppi.zarr",
+                        default="/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets_zarr/pick_place_d405.zarr",
                         help="Path to dataset")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--save_video", action='store_true', default=True)
