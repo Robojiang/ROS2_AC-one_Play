@@ -225,20 +225,9 @@ class GHOSTBeaconPolicy(BasePolicy):
                      use_norm = True
 
         def get_adaptive_grip(raw_val, idx):
-             # Default: (val + 1) / 2
-             val = (raw_val + 1.0) * 0.5
-             if use_norm:
-                 s = scale_vec[idx]
-                 o = offset_vec[idx]
-                 
-                 norm_val = raw_val * s + o
-                 # Heuristic: if min_est > max_est (in magnitude), invert
-                 min_est = (-1.0 - o) / (s + 1e-6)
-                 max_est = (1.0 - o) / (s + 1e-6)
-                 
-                 if torch.abs(min_est) > torch.abs(max_est):
-                     return 1.0 - val # Invert
-             return val
+             # Simple logic as requested: abs(val) / 2.5 -> [0, 1]
+             # raw_val is tensor
+             return torch.abs(raw_val) / 2.5
 
         # Left Arm (0-10)
         l_pos = pose_20d[..., 0:3]
@@ -308,16 +297,7 @@ class GHOSTBeaconPolicy(BasePolicy):
         if D == 32:
              # Left (Index 6)
              left_val = agent_pos[..., 6]
-             if use_norm:
-                 s, o = scale_vec[6], offset_vec[6]
-                 norm_val = left_val * s + o
-                 # Heuristic: Value closer to 0 is "Closed"
-                 min_est = (-1.0 - o) / (s + 1e-6)
-                 max_est = (1.0 - o) / (s + 1e-6)
-                 if torch.abs(min_est) > torch.abs(max_est):
-                     left_val = 1.0 - (norm_val + 1.0) * 0.5
-                 else:
-                     left_val = (norm_val + 1.0) * 0.5
+             left_val = torch.abs(left_val) / 2.5
              left_gripper_val = left_val.clip(0, 1) 
              
              left_pos = agent_pos[..., 14:17] 
@@ -326,15 +306,7 @@ class GHOSTBeaconPolicy(BasePolicy):
              
              # Right (Index 13)
              right_val = agent_pos[..., 13]
-             if use_norm:
-                 s, o = scale_vec[13], offset_vec[13]
-                 norm_val = right_val * s + o
-                 min_est = (-1.0 - o) / (s + 1e-6)
-                 max_est = (1.0 - o) / (s + 1e-6)
-                 if torch.abs(min_est) > torch.abs(max_est):
-                     right_val = 1.0 - (norm_val + 1.0) * 0.5
-                 else:
-                     right_val = (norm_val + 1.0) * 0.5
+             right_val = torch.abs(right_val) / 2.5
              right_gripper_val = right_val.clip(0, 1) 
              
              right_pos = agent_pos[..., 23:26]

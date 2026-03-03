@@ -223,17 +223,8 @@ class GHOSTKeyframePolicy(BasePolicy):
         left_rot = pose_20d[..., 3:9]
         left_raw_grip = pose_20d[..., 9] # (B, T)
         
-        left_grip = left_raw_grip
-        if use_norm:
-             # Apply same heuristic as agent_pos
-             s, o = scale_vec[9], offset_vec[9]
-             norm_val = left_raw_grip * s + o
-             min_est = (-1.0 - o) / (s + 1e-6)
-             max_est = (1.0 - o) / (s + 1e-6)
-             if torch.abs(min_est) > torch.abs(max_est):
-                 left_grip = 1.0 - (norm_val + 1.0) * 0.5
-             else:
-                 left_grip = (norm_val + 1.0) * 0.5
+        # Use simple logic as requested
+        left_grip = torch.abs(left_raw_grip) / 2.5
         left_grip = left_grip.clip(0, 1)
 
         states_list.append((left_pos, left_rot, left_grip))
@@ -243,17 +234,8 @@ class GHOSTKeyframePolicy(BasePolicy):
         right_rot = pose_20d[..., 13:19]
         right_raw_grip = pose_20d[..., 19]
         
-        right_grip = right_raw_grip
-        if use_norm:
-             s, o = scale_vec[19], offset_vec[19]
-             norm_val = right_raw_grip * s + o
-             min_est = (-1.0 - o) / (s + 1e-6)
-             max_est = (1.0 - o) / (s + 1e-6)
-             # Same check
-             if torch.abs(min_est) > torch.abs(max_est):
-                 right_grip = 1.0 - (norm_val + 1.0) * 0.5
-             else:
-                 right_grip = (norm_val + 1.0) * 0.5
+        # Use simple logic as requested
+        right_grip = torch.abs(right_raw_grip) / 2.5
         right_grip = right_grip.clip(0, 1)
         
         states_list.append((right_pos, right_rot, right_grip))
@@ -322,21 +304,11 @@ class GHOSTKeyframePolicy(BasePolicy):
                  use_norm = True
         
         # Left Gripper (Index 6)
+        # Keep logic simple as requested: 
+        # Range is -2.5 (Open) to 0 (Closed). 
+        # Take abs() and divide by 2.5 to get 0-1 open factor.
         left_val = agent_pos[..., 6]
-        if use_norm:
-             s, o = scale_vec[6], offset_vec[6]
-             norm_val = left_val * s + o
-             # Heuristic: Value closer to 0 is "Closed" (Width=0)
-             # Reconstruct min/max from Normalizer scaling y = x*s + o => x = (y-o)/s
-             min_est = (-1.0 - o) / (s + 1e-6)
-             max_est = (1.0 - o) / (s + 1e-6)
-             
-             # Map normalized [-1, 1] to [0, 1] (Width Ratio)
-             # If Min is further from 0 (e.g. -0.08 vs 0), Min is likely Open -> Invert
-             if torch.abs(min_est) > torch.abs(max_est):
-                 left_val = 1.0 - (norm_val + 1.0) * 0.5
-             else:
-                 left_val = (norm_val + 1.0) * 0.5
+        left_val = torch.abs(left_val) / 2.5
         left_gripper_val = left_val.clip(0, 1) # (B, T)
         
         left_pos = agent_pos[..., 14:17] # (B, T, 3)
@@ -345,16 +317,7 @@ class GHOSTKeyframePolicy(BasePolicy):
         
         # Right Gripper (Index 13)
         right_val = agent_pos[..., 13]
-        if use_norm:
-             s, o = scale_vec[13], offset_vec[13]
-             norm_val = right_val * s + o
-             min_est = (-1.0 - o) / (s + 1e-6)
-             max_est = (1.0 - o) / (s + 1e-6)
-             
-             if torch.abs(min_est) > torch.abs(max_est):
-                 right_val = 1.0 - (norm_val + 1.0) * 0.5
-             else:
-                 right_val = (norm_val + 1.0) * 0.5
+        right_val = torch.abs(right_val) / 2.5
         right_gripper_val = right_val.clip(0, 1) # (B, T)
         
         right_pos = agent_pos[..., 23:26]

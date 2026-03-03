@@ -31,7 +31,7 @@ sys.path.append(os.path.join(policy_dir, 'DP3', '3D-Diffusion-Policy'))
 from ghost_keyframe_policy import GHOSTKeyframePolicy
 from dataset.ghost_keyframe_dataset import GHOSTKeyframeDataset
 
-noise_ratio = 0.01 # 用于可视化的噪声比例 (可以调整以看到更明显的偏移)
+noise_ratio = 0.0 # 用于可视化的噪声比例 (可以调整以看到更明显的偏移)
 
 def visualize_keyframe_policy(zarr_path, episode_idx=0, save_video=False):
     print(f"Loading dataset from: {zarr_path}")

@@ -36,6 +36,8 @@ sys.path.append(os.path.join(policy_dir, 'DP3', '3D-Diffusion-Policy'))
 from ghost_beacon_key_policy import GHOSTBeaconKeyPolicy
 from dataset.ghost_keyframe_dataset import GHOSTKeyframeDataset
 
+noise_ratio = 0.0 # 用于可视化的噪声比例 (可以调整以看到更明显的偏移)
+
 def visualize_beacon_key_policy(zarr_path, episode_idx=0, save_video=False):
     print(f"Loading dataset from: {zarr_path}")
     
@@ -87,7 +89,7 @@ def visualize_beacon_key_policy(zarr_path, episode_idx=0, save_video=False):
         aux_point_num=200, 
         aux_length=0.2,
         beacon_sigma=0.3, # Sigma parameter
-        keyframe_noise_std=0.01, # Noise for viz
+        keyframe_noise_std=noise_ratio, # Noise for viz
         use_keyframe_prediction=True
     )
     

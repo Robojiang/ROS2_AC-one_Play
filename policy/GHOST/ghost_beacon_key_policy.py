@@ -217,21 +217,13 @@ class GHOSTBeaconKeyPolicy(BasePolicy):
                  if len(scale_vec) == 20: 
                      use_norm = True
 
-        # Left: 0-10
+                # Left: 0-10
         left_pos = pose_20d[..., 0:3]
         left_rot = pose_20d[..., 3:9]
         left_raw_grip = pose_20d[..., 9] # (B, T)
         
-        # Heuristic for Left Gripper (Index 9 in 20D)
-        left_grip = (left_raw_grip + 1.0) * 0.5 
-        
-        # Adaptive Logic
-        if use_norm:
-             s, o = scale_vec[9], offset_vec[9]
-             min_est = (-1.0 - o) / (s + 1e-6)
-             max_est = (1.0 - o) / (s + 1e-6)
-             if torch.abs(min_est) > torch.abs(max_est):
-                 left_grip = 1.0 - left_grip # Invert
+        # Simple Logic as requested
+        left_grip = torch.abs(left_raw_grip) / 2.5
         left_grip = left_grip.clip(0, 1)
 
         states_list.append((left_pos, left_rot, left_grip))
@@ -241,13 +233,8 @@ class GHOSTBeaconKeyPolicy(BasePolicy):
         right_rot = pose_20d[..., 13:19]
         right_raw_grip = pose_20d[..., 19]
         
-        right_grip = (right_raw_grip + 1.0) * 0.5
-        if use_norm:
-             s, o = scale_vec[19], offset_vec[19]
-             min_est = (-1.0 - o) / (s + 1e-6)
-             max_est = (1.0 - o) / (s + 1e-6)
-             if torch.abs(min_est) > torch.abs(max_est):
-                 right_grip = 1.0 - right_grip
+        # Simple Logic as requested
+        right_grip = torch.abs(right_raw_grip) / 2.5
         right_grip = right_grip.clip(0, 1)
         
         states_list.append((right_pos, right_rot, right_grip))
@@ -317,16 +304,7 @@ class GHOSTBeaconKeyPolicy(BasePolicy):
         if D == 32:
              # Left (Index 6)
              left_val = agent_pos[..., 6]
-             if use_norm:
-                 s, o = scale_vec[6], offset_vec[6]
-                 norm_val = left_val * s + o
-                 # Heuristic: Value closer to 0 is "Closed"
-                 min_est = (-1.0 - o) / (s + 1e-6)
-                 max_est = (1.0 - o) / (s + 1e-6)
-                 if torch.abs(min_est) > torch.abs(max_est):
-                     left_val = 1.0 - (norm_val + 1.0) * 0.5
-                 else:
-                     left_val = (norm_val + 1.0) * 0.5
+             left_val = torch.abs(left_val) / 2.5
              left_gripper_val = left_val.clip(0, 1) # (B, T)
              
              left_pos = agent_pos[..., 14:17] # (B, T, 3)
@@ -335,15 +313,7 @@ class GHOSTBeaconKeyPolicy(BasePolicy):
              
              # Right (Index 13)
              right_val = agent_pos[..., 13]
-             if use_norm:
-                 s, o = scale_vec[13], offset_vec[13]
-                 norm_val = right_val * s + o
-                 min_est = (-1.0 - o) / (s + 1e-6)
-                 max_est = (1.0 - o) / (s + 1e-6)
-                 if torch.abs(min_est) > torch.abs(max_est):
-                     right_val = 1.0 - (norm_val + 1.0) * 0.5
-                 else:
-                     right_val = (norm_val + 1.0) * 0.5
+             right_val = torch.abs(right_val) / 2.5
              right_gripper_val = right_val.clip(0, 1) # (B, T)
              
              right_pos = agent_pos[..., 23:26]
