@@ -67,7 +67,7 @@ policy:
   use_keyframe_prediction: True
   keyframe_model_prob: 0.0 
   keyframe_pred_loss_weight: 1.0
-  keyframe_noise_std: 0.02 
+  keyframe_noise_std: 0.01 
   
   # Beacon Heatmap Sigma
   beacon_sigma: 0.3

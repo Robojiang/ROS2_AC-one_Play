@@ -65,7 +65,7 @@ policy:
   use_keyframe_prediction: True
   keyframe_model_prob: 0.0 # Probability to use predicted keyframe (0.0=Use GT). Increase during training.
   keyframe_pred_loss_weight: 1.0
-  keyframe_noise_std: 0.05 # 归一化空间下的标准差，0.1 意味着约 10% 的扰动
+  keyframe_noise_std: 0.01 
   # Curriculum Learning Config
   keyframe_model_warmup_epochs: ${eval:'int(${training.num_epochs} * 0.2)'}
   keyframe_model_ramp_epochs: ${eval:'int(${training.num_epochs} * 0.1)'}
