@@ -42,6 +42,100 @@ from inference_utils.pointcloud_generator import PointCloudGenerator
 from inference_utils.model_loader import load_policy_model
 from inference_utils.calibration import load_calibration_data
 from scipy.spatial.transform import Rotation as R
+import pickle # Added for debug saving
+
+def save_debug_data(data_list, policy_name):
+    """保存调试数据到Zarr文件 (便于查看器检查)"""
+    if not data_list:
+        return
+
+    save_dir = ROOT / "debug_obs"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = int(time.time())
+    policy_safe = policy_name.replace('/', '_')
+    filename = f"debug_{policy_safe}_{timestamp}.zarr"
+    filepath = save_dir / filename
+    
+    print(f"\n[INFO] 正在保存 {len(data_list)} 帧调试数据到 {filepath} (Zarr格式) ...")
+    try:
+        import zarr
+        import numpy as np
+        
+        # 1. 整理数据为列表
+        # step_data keys: qpos, raw_eef, point_cloud, agent_pos, transformed_eef
+        qpos_list = [d['qpos'] for d in data_list]
+        point_cloud_list = [d['point_cloud'] for d in data_list]
+        agent_pos_list = [d['agent_pos'] for d in data_list]
+        
+        # 提取 Left/Right Endpose (并转换为 7D: Pos + Quat[w,x,y,z])
+        # transformed_eef['left'] 是 [x, y, z, rx, ry, rz] (Euler)
+        left_endpose_list = []
+        right_endpose_list = []
+        
+        for d in data_list:
+            # Left
+            l_raw = d['transformed_eef']['left']
+            l_quat = euler_to_w_last_quat(l_raw[3:6]) # Euler -> [w,x,y,z]
+            l_pose_7d = np.concatenate([l_raw[:3], l_quat])
+            left_endpose_list.append(l_pose_7d)
+            
+            # Right 
+            r_raw = d['transformed_eef']['right']
+            r_quat = euler_to_w_last_quat(r_raw[3:6])
+            r_pose_7d = np.concatenate([r_raw[:3], r_quat])
+            right_endpose_list.append(r_pose_7d)
+        
+        # Stack arrays
+        state = np.array(qpos_list) # (T, 14)
+        point_cloud = np.array(point_cloud_list) # (T, N, 6)
+        agent_pos = np.array(agent_pos_list) # (T, D)
+        left_endpose = np.array(left_endpose_list) # (T, 7)
+        right_endpose = np.array(right_endpose_list) # (T, 7)
+        
+        # 构造 Dummy Action (因为 Inference 阶段可能只存了观测，或者 action 需要额外收集)
+        # 既然是为了检查格式，存一个全0的 action 即可
+        action = np.zeros_like(state) 
+        
+        # 2. 创建 Zarr Group (使用 zarr.open 兼容新旧版本)
+        # 注意: Zarr 3.x 以后建议使用 zarr.open(path, mode='w')
+        root_group = zarr.open(str(filepath), mode='w')
+        
+        # 3. 创建 Data Group
+        data_group = root_group.create_group('data')
+        
+        # 4. 写入数据集
+        # 直接赋值以兼容 Zarr 新版本 (避免使用 create_dataset 和 compressor 参数带来的版本差异)
+        # Zarr 会自动推断 chunks 和 default compressor
+        data_group['state'] = state
+        data_group['action'] = action
+        data_group['point_cloud'] = point_cloud
+        data_group['agent_pos'] = agent_pos
+        data_group['left_endpose'] = left_endpose
+        data_group['right_endpose'] = right_endpose
+
+        # 5. Meta Group (Episode Ends)
+        meta_group = root_group.create_group('meta')
+        episode_ends = np.array([len(data_list)], dtype=np.int64)
+        meta_group['episode_ends'] = episode_ends
+        
+        print(f"[INFO] 保存成功: {filepath}")
+        
+    except ImportError:
+        print("[ERROR] 缺少 zarr 库，尝试回退到 Pickle 保存...")
+        # Fallback to pickle
+        pkl_path = filepath.with_suffix('.pkl')
+        try:
+            with open(pkl_path, 'wb') as f:
+                pickle.dump(data_list, f)
+            print(f"[INFO] 已回退保存为: {pkl_path}")
+        except Exception as e:
+             print(f"[ERROR] Pickle 保存也失败: {e}")
+
+    except Exception as e:
+        print(f"[ERROR] Zarr 保存失败: {e}")
+        import traceback
+        traceback.print_exc()
 
 def euler_to_w_last_quat(euler):
     """
@@ -394,169 +488,201 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
     action_execution_idx = 0    # 当前块执行到了第几步
     EXECUTION_HORIZON = 8       # 每执行8步重新推理一次 (可根据推理速度调整)
     
+    # === Debug 数据录制 ===
+    debug_data_list = []
+    
     step_count = 0
     print(f"[INFO] 开始推理循环 (max_steps={args.max_publish_step})")
     if args.debug:
-        print("[WARN] DEBUG模式：不执行动作")
+        print("[WARN] DEBUG模式：不执行动作，将录制每一个step的观测数据(image, qpos, point_cloud, agent_pos)")
     
-    while ros_proc.is_alive():
-        try:
-            # 从共享内存读取观测
-            obs_dict = {"images": {}, "images_depth": {}, "qpos": None, "eef": None}
-            
-            for cam in args.camera_names:
-                # RGB
-                shm, shape, dtype = shm_dict[f"{cam}_rgb"]
-                obs_dict["images"][cam] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+    try:
+        while ros_proc.is_alive():
+            try:
+                # 从共享内存读取观测
+                obs_dict = {"images": {}, "images_depth": {}, "qpos": None, "eef": None}
                 
-                # Depth
-                shm, shape, dtype = shm_dict[f"{cam}_depth"]
-                obs_dict["images_depth"][cam] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
-            
-            shm, shape, dtype = shm_dict["qpos"]
-            obs_dict["qpos"] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
-            
-            shm, shape, dtype = shm_dict["eef"]
-            obs_dict["eef"] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
-            
-            # 生成点云 (获取统一坐标系下的末端位姿)
-            point_cloud, transformed_eef = pc_generator.generate(
-                head_depth=obs_dict['images_depth']['head'],
-                head_color=obs_dict['images']['head'],
-                left_depth=obs_dict['images_depth']['left_wrist'],
-                left_color=obs_dict['images']['left_wrist'],
-                right_depth=obs_dict['images_depth']['right_wrist'],
-                right_color=obs_dict['images']['right_wrist'],
-                left_eef=obs_dict['eef'][:7],
-                right_eef=obs_dict['eef'][7:14],
-                intrinsics=calibration_data['intrinsics'],
-                T_H_LB=calibration_data['T_H_LB'],
-                T_H_RB=calibration_data['T_H_RB'],
-                T_LE_LC=calibration_data['T_LE_LC'],
-                T_RE_RC=calibration_data['T_RE_RC'],
-                T_LB_H=calibration_data['T_LB_H']
-            )
-            
-            # --- 构造 Agent Pos ---
-            if args.policy == 'GHOST':
-                # GHOST 需要: [qpos(14), left_pos(3), left_rot6d(6), right_pos(3), right_rot6d(6)] = 32
-                # eef 数据来自 transformed_eef (已经在左臂基座系下)
-                # Left
-                l_pos = transformed_eef['left'][:3]
-                l_euler = transformed_eef['left'][3:6]
-                l_quat = euler_to_w_last_quat(l_euler) # Euler -> [w, x, y, z]
+                for cam in args.camera_names:
+                    # RGB
+                    shm, shape, dtype = shm_dict[f"{cam}_rgb"]
+                    obs_dict["images"][cam] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+                    
+                    # Depth
+                    shm, shape, dtype = shm_dict[f"{cam}_depth"]
+                    obs_dict["images_depth"][cam] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
                 
-                # Right
-                r_pos = transformed_eef['right'][:3]
-                r_euler = transformed_eef['right'][3:6]
-                r_quat = euler_to_w_last_quat(r_euler) # Euler -> [w, x, y, z]
+                shm, shape, dtype = shm_dict["qpos"]
+                obs_dict["qpos"] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
                 
-                agent_pos = get_ghost_agent_pos(
-                    obs_dict['qpos'], 
-                    l_pos, l_quat,
-                    r_pos, r_quat
+                shm, shape, dtype = shm_dict["eef"]
+                obs_dict["eef"] = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+                
+                # 生成点云 (获取统一坐标系下的末端位姿)
+                point_cloud, transformed_eef = pc_generator.generate(
+                    head_depth=obs_dict['images_depth']['head'],
+                    head_color=obs_dict['images']['head'],
+                    left_depth=obs_dict['images_depth']['left_wrist'],
+                    left_color=obs_dict['images']['left_wrist'],
+                    right_depth=obs_dict['images_depth']['right_wrist'],
+                    right_color=obs_dict['images']['right_wrist'],
+                    left_eef=obs_dict['eef'][:7],
+                    right_eef=obs_dict['eef'][7:14],
+                    intrinsics=calibration_data['intrinsics'],
+                    T_H_LB=calibration_data['T_H_LB'],
+                    T_H_RB=calibration_data['T_H_RB'],
+                    T_LE_LC=calibration_data['T_LE_LC'],
+                    T_RE_RC=calibration_data['T_RE_RC'],
+                    T_LB_H=calibration_data['T_LB_H']
                 )
-            else:
-                # DP3 (通常只需 qpos=14 或者 qpos+eef=28，视训练配置而定)
-                # 你之前的报错显示 DP3 正常跑通，所以如果不改 GHOST 逻辑，DP3 维持原状
-                # 这里假设 DP3 只需要 qpos (14)
-                 agent_pos = obs_dict['qpos']
-
-            # 添加到观测缓存
-            obs_buffer.append((point_cloud, agent_pos))
-            if len(obs_buffer) > n_obs_steps:
-                obs_buffer.pop(0)
-            
-            # 如果缓存不足，用最新观测填充
-            while len(obs_buffer) < n_obs_steps:
-                obs_buffer.insert(0, obs_buffer[0])
-            
-            # === Receding Horizon Control 逻辑 ===
-            # 1. 如果没有动作块
-            # 2. 或者已经执行了 EXECUTION_HORIZON 步
-            # 3. 或者当前块已经快执行完了 (保护措施)
-            need_inference = (current_action_chunk is None) or \
-                             (action_execution_idx >= EXECUTION_HORIZON) or \
-                             (action_execution_idx >= len(current_action_chunk))
-
-            if need_inference:
-                # 构建模型输入：(B=1, To, N, 6) 和 (B=1, To, D)
-                point_clouds = []
-                agent_poses = []
                 
-                for pc, ap in obs_buffer[-n_obs_steps:]:
-                    point_clouds.append(pc)  # (N, 6)
-                    agent_poses.append(ap)   # (D,)
-                
-                # 堆叠并转换为 torch tensor
-                point_cloud_batch = torch.from_numpy(np.stack(point_clouds)).float().unsqueeze(0)  # (1, To, N, 6)
-                agent_pos_batch = torch.from_numpy(np.stack(agent_poses)).float().unsqueeze(0)      # (1, To, D)
-                
-                model_input = {
-                    'point_cloud': point_cloud_batch,
-                    'agent_pos': agent_pos_batch
-                }
-                
-                # 推理
-                if args.debug: t0 = time.time()
-                actions = policy.predict_action(model_input)  # (1, horizon, action_dim)
-                if args.debug and step_count % 30 == 0:
-                     print(f"[DEBUG] 推理耗时: {(time.time()-t0)*1000:.1f}ms")
-
-                current_action_chunk = actions[0]  # (horizon, action_dim)
-                action_execution_idx = 0
-                
-            # === 获取并执行当前动作 ===
-            if current_action_chunk is not None:
-                # 防止索引越界
-                safe_idx = min(action_execution_idx, len(current_action_chunk) - 1)
-                action = current_action_chunk[safe_idx]
-                action_execution_idx += 1
-                
-                if args.debug:
-                    if step_count % 30 == 0:
-                        left_curr = obs_dict['qpos'][:7]
-                        right_curr = obs_dict['qpos'][7:14]
-                        left_dp = action[:7]
-                        right_dp = action[7:14]
-                        
-                        print(f"\n[DEBUG] Step {step_count}:")
-                        print(f"  Current Left : {np.round(left_curr, 3)}")
-                        print(f"  Action  Left : {np.round(left_dp, 3)}")
-                        print(f"  Delta   Left : {np.round(left_dp - left_curr, 3)}")
-                        print("-" * 40)
-                        print(f"  Current Right: {np.round(right_curr, 3)}")
-                        print(f"  Action  Right: {np.round(right_dp, 3)}")
-                        print(f"  Delta   Right: {np.round(right_dp - right_curr, 3)}")
+                # --- 构造 Agent Pos ---
+                if args.policy.startswith('GHOST/'):
+                    # GHOST 需要: [qpos(14), left_pos(3), left_rot6d(6), right_pos(3), right_rot6d(6)] = 32
+                    # eef 数据来自 transformed_eef (已经在左臂基座系下)
+                    # Left
+                    l_pos = transformed_eef['left'][:3]
+                    l_euler = transformed_eef['left'][3:6]
+                    l_quat = euler_to_w_last_quat(l_euler) # Euler -> [w, x, y, z]
+                    
+                    # Right
+                    r_pos = transformed_eef['right'][:3]
+                    r_euler = transformed_eef['right'][3:6]
+                    r_quat = euler_to_w_last_quat(r_euler) # Euler -> [w, x, y, z]
+                    
+                    agent_pos = get_ghost_agent_pos(
+                        obs_dict['qpos'], 
+                        l_pos, l_quat,
+                        r_pos, r_quat
+                    )
                 else:
-                    # 写入共享内存
-                    shm, shape, dtype = shm_dict["action"]
-                    np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
-                    np_array[:] = action
+                    # DP3 (通常只需 qpos=14 或者 qpos+eef=28，视训练配置而定)
+                    # 你之前的报错显示 DP3 正常跑通，所以如果不改 GHOST 逻辑，DP3 维持原状
+                    # 这里假设 DP3 只需要 qpos (14)
+                     agent_pos = obs_dict['qpos']
+
+                # === 保存 Debug 数据 ===
+                if args.debug:
+                    step_data = {
+                        'step': step_count,
+                        'timestamp': time.time(),
+                        'qpos': obs_dict['qpos'], # (14,)
+                        'raw_eef': obs_dict['eef'], # (14,)
+                        'point_cloud': point_cloud, # (N, 6)
+                        'agent_pos': agent_pos,     # (32,) or (14,)
+                        'transformed_eef': transformed_eef # dict
+                    }
+                    # 为了不让内存爆炸，只存关键数据，图片太大就不存了，除非你有需求
+                    # 如果你想存图片，把下面的注释打开，但会导致写入变慢和文件巨大
+                    # step_data['images'] = obs_dict['images']
+                    debug_data_list.append(step_data)
+                    
+                    # 每100步打印一次
+                    if step_count % 30 == 0:
+                        print(f"[DEBUG] Recorded step {step_count} | PC Points: {len(point_cloud)} | AgentPos dim: {agent_pos.shape}")
+
+                # 添加到观测缓存
+                obs_buffer.append((point_cloud, agent_pos))
+                if len(obs_buffer) > n_obs_steps:
+                    obs_buffer.pop(0)
                 
-                step_count += 1
-                if step_count >= args.max_publish_step:
-                    break
-            
-            time.sleep(1.0 / args.frame_rate)
-            
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"[ERROR] 推理出错: {e}")
-            import traceback
-            traceback.print_exc()
-            break
+                # 如果缓存不足，用最新观测填充
+                while len(obs_buffer) < n_obs_steps:
+                    obs_buffer.insert(0, obs_buffer[0])
+                
+                # === Receding Horizon Control 逻辑 ===
+                # 1. 如果没有动作块
+                # 2. 或者已经执行了 EXECUTION_HORIZON 步
+                # 3. 或者当前块已经快执行完了 (保护措施)
+                need_inference = (current_action_chunk is None) or \
+                                 (action_execution_idx >= EXECUTION_HORIZON) or \
+                                 (action_execution_idx >= len(current_action_chunk))
+
+                if need_inference:
+                    # 构建模型输入：(B=1, To, N, 6) 和 (B=1, To, D)
+                    point_clouds = []
+                    agent_poses = []
+                    
+                    for pc, ap in obs_buffer[-n_obs_steps:]:
+                        point_clouds.append(pc)  # (N, 6)
+                        agent_poses.append(ap)   # (D,)
+                    
+                    # 堆叠并转换为 torch tensor
+                    point_cloud_batch = torch.from_numpy(np.stack(point_clouds)).float().unsqueeze(0)  # (1, To, N, 6)
+                    agent_pos_batch = torch.from_numpy(np.stack(agent_poses)).float().unsqueeze(0)      # (1, To, D)
+                    
+                    model_input = {
+                        'point_cloud': point_cloud_batch,
+                        'agent_pos': agent_pos_batch
+                    }
+                    
+                    # 推理
+                    if args.debug: t0 = time.time()
+                    actions = policy.predict_action(model_input)  # (1, horizon, action_dim)
+                    if args.debug and step_count % 30 == 0:
+                         print(f"[DEBUG] 推理耗时: {(time.time()-t0)*1000:.1f}ms")
+
+                    current_action_chunk = actions[0]  # (horizon, action_dim)
+                    action_execution_idx = 0
+                    
+                # === 获取并执行当前动作 ===
+                if current_action_chunk is not None:
+                    # 防止索引越界
+                    safe_idx = min(action_execution_idx, len(current_action_chunk) - 1)
+                    action = current_action_chunk[safe_idx]
+                    action_execution_idx += 1
+                    
+                    if args.debug:
+                        if step_count % 30 == 0:
+                            left_curr = obs_dict['qpos'][:7]
+                            right_curr = obs_dict['qpos'][7:14]
+                            left_dp = action[:7]
+                            right_dp = action[7:14]
+                            
+                            print(f"\n[DEBUG] Step {step_count}:")
+                            print(f"  Current Left : {np.round(left_curr, 3)}")
+                            print(f"  Action  Left : {np.round(left_dp, 3)}")
+                            print(f"  Delta   Left : {np.round(left_dp - left_curr, 3)}")
+                            print("-" * 40)
+                            print(f"  Current Right: {np.round(right_curr, 3)}")
+                            print(f"  Action  Right: {np.round(right_dp, 3)}")
+                            print(f"  Delta   Right: {np.round(right_dp - right_curr, 3)}")
+                    else:
+                        # 写入共享内存
+                        shm, shape, dtype = shm_dict["action"]
+                        np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+                        np_array[:] = action
+                    
+                    step_count += 1
+                    if step_count >= args.max_publish_step:
+                        break
+                
+                time.sleep(1.0 / args.frame_rate)
+                
+            except KeyboardInterrupt:
+                print("\n[INFO] 用户中断推理")
+                break
+            except Exception as e:
+                print(f"[ERROR] 推理出错: {e}")
+                import traceback
+                traceback.print_exc()
+                break
+    finally:
+        # === 保存录制的数据 ===
+        # 这个 finally 位于 while 循环外部，确保只在整个流程结束时保存一次
+        if args.debug:
+            save_debug_data(debug_data_list, args.policy)
     
     print("[INFO] 推理进程结束")
+    
+    # === 保存录制的数据 === (已移至 finally 块中处理)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--policy', type=str, default='GHOST', choices=['DP3', 'GHOST'])
+    parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST/base', 'GHOST/key'])
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
-    parser.add_argument('--ckpt_name', type=str, help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
-    # parser.add_argument('--ckpt_name', type=str, default='750.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
+    # parser.add_argument('--ckpt_name', type=str, help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
+    parser.add_argument('--ckpt_name', type=str, default='3000.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     parser.add_argument('--debug', action='store_true', default=True)
     # parser.add_argument('--debug', action='store_true')
     parser.add_argument('--max_publish_step', type=int, default=1000)

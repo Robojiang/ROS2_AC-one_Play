@@ -150,7 +150,7 @@ def load_policy_model(policy_name, task_name, ckpt_name, root_dir="weights"):
     统一加载接口 - 根据策略名称自动加载模型和 normalizer
     
     Args:
-        policy_name: 'DP3' 或 'GHOST'
+        policy_name: 'DP3' 或 'GHOST' (支持 'GHOST/base', 'GHOST/key')
         task_name: 任务名称，例如 'pick_place_d405'
         ckpt_name: checkpoint 文件名，例如 'latest.ckpt'
         root_dir: 权重根目录
@@ -159,6 +159,8 @@ def load_policy_model(policy_name, task_name, ckpt_name, root_dir="weights"):
         policy_wrapper: PolicyWrapper 实例（DP3Wrapper 或 GHOSTWrapper）
     """
     # 1. 构建 checkpoint 路径
+    # 直接拼接路径，不再做特殊拆分处理，要求 policy_name 对应实际文件夹结构
+    # 例如 policy_name="GHOST/base" -> weights/task/GHOST/base/ckpt
     ckpt_path = Path(root_dir) / task_name / policy_name / ckpt_name
     
     if not ckpt_path.exists():
@@ -181,7 +183,7 @@ def load_policy_model(policy_name, task_name, ckpt_name, root_dir="weights"):
     # 4. 根据策略名称加载不同模型
     if policy_name.upper() == 'DP3':
         return _load_dp3_model(checkpoint, config)
-    elif policy_name.upper() == 'GHOST':
+    elif policy_name.upper().startswith('GHOST'):
         return _load_ghost_model(checkpoint, config)
     else:
         raise ValueError(f"Unknown policy: {policy_name}")
@@ -451,12 +453,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         policy_name = sys.argv[1]
         task_name = sys.argv[2] if len(sys.argv) > 2 else "pick_place_d405"
-        ckpt_name = sys.argv[3] if len(sys.argv) > 3 else "750.ckpt"
+        ckpt_name = sys.argv[3] if len(sys.argv) > 3 else "3000.ckpt"
     else:
         # policy_name = "DP3"
         # task_name = "pick_place_d405"
-        # ckpt_name = "750.ckpt"
-        policy_name = "GHOST"
+        # ckpt_name = "3000.ckpt"
+        policy_name = "GHOST/base"
         task_name = "pick_place_d405"
         ckpt_name = "latest.ckpt"
     

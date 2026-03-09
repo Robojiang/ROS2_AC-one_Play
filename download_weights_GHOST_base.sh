@@ -7,7 +7,7 @@ export ALIYUNPAN_VERBOSE=0
 export ALIYUNPAN_BIN=/home/arx/haitao_codes/aliyunpan-v0.3.7-linux-amd64/aliyunpan
 
 # 本地目录（请更改成你自己的目录）
-LOCAL_DIR="/home/arx/haitao_codes/ROS2_AC-one_Play/weights/pick_place_d405/GHOST"
+LOCAL_DIR="/home/arx/haitao_codes/ROS2_AC-one_Play"
 # 网盘目录（请更改成你自己的目录）
 PAN_DIR="/weights/pick_place_d405/GHOST/base/latest.ckpt"
 

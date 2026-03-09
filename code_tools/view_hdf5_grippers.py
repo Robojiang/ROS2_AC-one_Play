@@ -166,7 +166,7 @@ def analyze_gripper_changes(left_gripper, right_gripper, threshold=0.05):
 
 def main():
     parser = argparse.ArgumentParser(description="读取HDF5文件并绘制夹爪开度折线图")
-    parser.add_argument("--file", type=str, default="datasets/pick_place_d405/episode_4.hdf5", help="HDF5文件路径")
+    parser.add_argument("--file", type=str, default="datasets/pick_place_d405/episode_0.hdf5", help="HDF5文件路径")
     parser.add_argument("--save", type=str, default=None, help="保存图像的路径（可选）")
     parser.add_argument("--threshold", type=float, default=0.05, help="夹爪变化阈值（用于分析）")
     
