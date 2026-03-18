@@ -154,3 +154,4 @@ policy/DP3/3D-Diffusion-Policy/diffusion_policy_3d.egg-info
 act/weights/*
 *.mp4
 act/*.zip
+act/datasets_small/*
