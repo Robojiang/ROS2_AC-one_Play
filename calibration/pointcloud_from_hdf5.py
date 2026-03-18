@@ -10,9 +10,9 @@ from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 
 # ================= 配置 =================
-HDF5_PATH = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets/episode_10.hdf5"
-CALIBRATION_DIR = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/calibration_results"
-INTRINSICS_FILE = "/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/calibration_results/intrinsics.json"
+HDF5_PATH = "/home/arx/haitao_codes/ROS2_AC-one_Play/act/datasets/episode_0.hdf5"
+CALIBRATION_DIR = "/home/arx/haitao_codes/ROS2_AC-one_Play/calibration_results"
+INTRINSICS_FILE = "/home/arx/haitao_codes/ROS2_AC-one_Play/calibration_results/D405_intrinsics.json"
 
 FRAME_INDEX = 0  # 读取第一帧
 MAX_DEPTH_Head = 1 # 最大深度限制 (米)
