@@ -276,6 +276,32 @@ def move_to_target(ros_operator, target_pos, steps=50):
 
         ros_operator.follow_arm_publish_continuous(pos.tolist(), pos.tolist())
 
+SAFE_INIT_POSITION = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+def move_to_safe_position(ros_operator, steps=100):
+    """移动到安全位置"""
+    print("\n[INFO] 正在移动到安全位置...")
+    try:
+        obs = ros_operator.get_observation()
+        if obs is None:
+            ros_operator.follow_arm_publish_continuous(SAFE_INIT_POSITION, SAFE_INIT_POSITION)
+            return
+        
+        left_start = np.array(obs['qpos'][:7])
+        right_start = np.array(obs['qpos'][7:14])
+        target = np.array(SAFE_INIT_POSITION)
+        
+        for i in range(steps):
+            t = i / (steps - 1)
+            s = (1 - math.cos(math.pi * t)) / 2
+            left_pos = left_start + (target - left_start) * s
+            right_pos = right_start + (target - right_start) * s
+            ros_operator.follow_arm_publish_continuous(left_pos.tolist(), right_pos.tolist())
+        
+        print("[INFO] 已到达安全位置")
+    except Exception as e:
+        print(f"[WARN] 归位出错: {e}")
+
 
 def init_robot(ros_operator, use_base, connected_event, start_event):
     init0 = [0.0, 0.948, 0.858, -0.573, 0.0, 0.0, -2.8]
@@ -293,13 +319,16 @@ def init_robot(ros_operator, use_base, connected_event, start_event):
         ros_operator.start_base_control_thread()
 
 
-def signal_handler(signal, frame, ros_operator):
+def signal_handler(signal, frame, ros_operator, use_base=False):
     print('Caught Ctrl+C / SIGINT signal')
+    print('\n[INFO] 正在安全关闭...')
+    move_to_safe_position(ros_operator, steps=100)
 
-    # 底盘给零
-    ros_operator.base_enable = False
-    ros_operator.robot_base_shutdown()
-    ros_operator.base_control_thread.join()
+    if use_base:
+        # 底盘给零
+        ros_operator.base_enable = False
+        ros_operator.robot_base_shutdown()
+        ros_operator.base_control_thread.join()
 
     sys.exit(0)
 
@@ -329,8 +358,9 @@ def ros_process(args, config, meta_queue, connected_event, start_event, shm_read
     spin_thread = threading.Thread(target=_spin_loop, args=(ros_operator,), daemon=True)
     spin_thread.start()
 
-    if args.use_base:
-        signal.signal(signal.SIGINT, partial(signal_handler, ros_operator=ros_operator))
+    handler = partial(signal_handler, ros_operator=ros_operator, use_base=args.use_base)
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
 
     init_robot(ros_operator, args.use_base, connected_event, start_event)
 
@@ -364,52 +394,57 @@ def ros_process(args, config, meta_queue, connected_event, start_event, shm_read
     shm_ready_event.set()
 
     rate = Rate(args.frame_rate)
-    while rclpy.ok():
-        obs = ros_operator.get_observation()
-        if not obs:
+    try:
+        while rclpy.ok():
+            obs = ros_operator.get_observation()
+            if not obs:
+                rate.sleep()
+
+                continue
+
+            # 写入共享内存
+            for cam in args.camera_names:
+                shm, shape, dtype = shm_dict[cam]
+                np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+                np_array[:] = obs["images"][cam]
+            for state_key in shapes["states"]:
+                shm, shape, dtype = shm_dict[state_key]
+                np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+                np_array[:] = obs[state_key]
+
+            # 读取动作并执行
+            shm, shape, dtype = shm_dict["action"]
+            action = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
+            if np.any(action):  # 确保动作不全是 0
+                gripper_gate = args.gripper_gate
+
+                gripper_idx = [6, 13]
+
+                left_action = action[:gripper_idx[0] + 1]  # 取8维度
+                if gripper_gate != -1:
+                    left_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
+
+                right_action = action[gripper_idx[0] + 1:gripper_idx[1] + 1]
+                if gripper_gate != -1:
+                    right_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
+
+                ros_operator.follow_arm_publish(left_action, right_action)
+
+                if args.use_base:
+                    action_base = action[gripper_idx[1] + 1:gripper_idx[1] + 1 + 10]
+                    ros_operator.set_robot_base_target(action_base)
+
             rate.sleep()
 
-            continue
-
-        # 写入共享内存
-        for cam in args.camera_names:
-            shm, shape, dtype = shm_dict[cam]
-            np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
-            np_array[:] = obs["images"][cam]
-        for state_key in shapes["states"]:
-            shm, shape, dtype = shm_dict[state_key]
-            np_array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
-            np_array[:] = obs[state_key]
-
-        # 读取动作并执行
-        shm, shape, dtype = shm_dict["action"]
-        action = np.ndarray(shape, dtype=dtype, buffer=shm.buf).copy()
-        if np.any(action):  # 确保动作不全是 0
-            gripper_gate = args.gripper_gate
-
-            gripper_idx = [6, 13]
-
-            left_action = action[:gripper_idx[0] + 1]  # 取8维度
-            if gripper_gate != -1:
-                left_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
-
-            right_action = action[gripper_idx[0] + 1:gripper_idx[1] + 1]
-            if gripper_gate != -1:
-                right_action[gripper_idx[0]] = apply_gripper_gate(left_action[gripper_idx[0]], gripper_gate)
-
-            ros_operator.follow_arm_publish(left_action, right_action)
-
-            if args.use_base:
-                action_base = action[gripper_idx[1] + 1:gripper_idx[1] + 1 + 10]
-                ros_operator.set_robot_base_target(action_base)
-
-        rate.sleep()
-
-    executor.shutdown()
-    rclpy.shutdown()
-    for shm, _, _ in shm_dict.values():
-        shm.close()
-        shm.unlink()
+    except Exception as e:
+        print(f"[ERROR] ros_process异常: {e}")
+    finally:
+        print("[INFO] ros_process正在清理...")
+        move_to_safe_position(ros_operator, steps=100)
+        rclpy.shutdown()
+        for shm, _, _ in shm_dict.values():
+            shm.close()
+            shm.unlink()
 
 
 def inference_process(args, config, shm_dict, shapes, ros_proc):

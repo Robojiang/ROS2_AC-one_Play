@@ -258,7 +258,7 @@ def visualize_zarr_v3(zarr_path, start_frame=0, save_video=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", default="/home/arx/haitao_codes/ROS2_AC-one_Play/debug_obs/debug_DP3_1773047769.zarr", help="Path to .zarr file or .pkl file")
+    parser.add_argument("--path", default="/home/arx/haitao_codes/ROS2_AC-one_Play/debug_obs/debug_DP3_1773987786.zarr", help="Path to .zarr file or .pkl file")
     parser.add_argument("--video", action="store_true", help="Save video")
     
     args = parser.parse_args()

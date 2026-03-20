@@ -555,8 +555,6 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                         r_pos, r_quat
                     )
                 else:
-                    # DP3 (通常只需 qpos=14 或者 qpos+eef=28，视训练配置而定)
-                    # 你之前的报错显示 DP3 正常跑通，所以如果不改 GHOST 逻辑，DP3 维持原状
                     # 这里假设 DP3 只需要 qpos (14)
                      agent_pos = obs_dict['qpos']
 
@@ -683,8 +681,8 @@ def parse_args():
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
     # parser.add_argument('--ckpt_name', type=str, help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     parser.add_argument('--ckpt_name', type=str, default='3000.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
-    parser.add_argument('--debug', action='store_true', default=True)
-    # parser.add_argument('--debug', action='store_true')
+    # parser.add_argument('--debug', action='store_true', default=True)
+    parser.add_argument('--debug', action='store_true')
     parser.add_argument('--max_publish_step', type=int, default=1000)
     parser.add_argument('--frame_rate', type=int, default=60)
     parser.add_argument('--calibration_dir', type=str, default=str(ROOT / 'calibration_results'))
