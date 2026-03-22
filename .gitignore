@@ -155,3 +155,4 @@ act/weights/*
 *.mp4
 act/*.zip
 act/datasets_small/*
+.vscode/*

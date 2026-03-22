@@ -1,0 +1,6 @@
+
+bash /mnt/afs/250010074/robot_manipulation/ROS2_AC-one_Play/policy/GHOST/train_on_server_trident.sh
+
+bash /mnt/afs/250010074/robot_manipulation/ROS2_AC-one_Play/policy/DP3/train_on_server.sh
+
+bash /mnt/afs/250010074/robot_manipulation/ROS2_AC-one_Play/policy/GHOST/train_on_server_key_trident.sh
