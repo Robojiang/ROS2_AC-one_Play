@@ -30,6 +30,24 @@ except ImportError as e:
     print(f"[ERROR] Import failed. Make sure paths are correct.\n{e}")
     sys.exit(1)
 
+def quat_to_rot6d(quat):
+    """Batched numpy convert quat [w,x,y,z] to Rot6D"""
+    w, x, y, z = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+    
+    xx, yy, zz = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
+    xw, yw, zw = x*w, y*w, z*w
+    
+    r11 = 1 - 2 * (yy + zz)
+    r21 = 2 * (xy + zw)
+    r31 = 2 * (xz - yw)
+    
+    r12 = 2 * (xy - zw)
+    r22 = 1 - 2 * (xx + zz)
+    r32 = 2 * (yz + xw)
+    
+    return np.stack([r11, r21, r31, r12, r22, r32], axis=-1)
+
 def visualize_zarr_v3(zarr_path, start_frame=0, save_video=False):
     """
     Visualize Zarr dataset compatible with Zarr v3.
@@ -61,13 +79,22 @@ def visualize_zarr_v3(zarr_path, start_frame=0, save_video=False):
     try:
         data_group = root['data']
         point_cloud_arr = data_group['point_cloud'][:]
-        agent_pos_arr = data_group['agent_pos'][:]
         state_arr = data_group['state'][:] # Gripper info is here (indices 6 and 13)
+        left_endpose_arr = data_group['left_endpose'][:]
+        right_endpose_arr = data_group['right_endpose'][:]
+        
+        # 强制重构 32D Agent Pos (防止存储时按照DP3的14维直接存入)
+        l_pos = left_endpose_arr[:, :3]
+        l_rot = quat_to_rot6d(left_endpose_arr[:, 3:]) 
+        r_pos = right_endpose_arr[:, :3]
+        r_rot = quat_to_rot6d(right_endpose_arr[:, 3:])
+        
+        agent_pos_arr = np.concatenate([state_arr, l_pos, l_rot, r_pos, r_rot], axis=1)
         
         # Checking shapes
         print(f"Loaded Data Shapes:")
         print(f"  Point Cloud: {point_cloud_arr.shape}")
-        print(f"  Agent Pos:   {agent_pos_arr.shape}")
+        print(f"  Agent Pos (Reconstructed):   {agent_pos_arr.shape}")
         print(f"  State:       {state_arr.shape}")
         
     except KeyError as e:
