@@ -39,7 +39,7 @@ def load_calibration_data(args):
         dict: 包含所有标定数据的字典
     """
     calibration_dir = Path(args.calibration_dir)
-    intrinsics_file = calibration_dir / "D405_intrinsics.json"
+    intrinsics_file = calibration_dir / "D435_intrinsics.json"
     
     print(f"[INFO] 加载标定数据: {calibration_dir}")
     

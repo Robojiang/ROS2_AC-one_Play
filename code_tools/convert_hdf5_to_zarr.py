@@ -32,7 +32,7 @@ from inference_utils.pointcloud_generator import PointCloudGenerator
 DATASETS_DIR = os.path.join(BASE_DIR, "datasets")
 DATASETS_ZARR_DIR = os.path.join(BASE_DIR, "datasets_zarr")
 CALIBRATION_DIR = os.path.join(BASE_DIR, "calibration_results")
-INTRINSICS_FILE = os.path.join(CALIBRATION_DIR, "D405_intrinsics.json")
+INTRINSICS_FILE = os.path.join(CALIBRATION_DIR, "D435_intrinsics.json")
 
 # ⚡ GPU加速配置
 USE_GPU = torch.cuda.is_available()
