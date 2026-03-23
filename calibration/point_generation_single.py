@@ -12,7 +12,7 @@ import open3d as o3d
 # ================= 配置 =================
 DATA_ROOT = "data_points_test"
 RESULTS_DIR = "calibration_results"
-INTRINSICS_FILE = "calibration_results/intrinsics.json"
+INTRINSICS_FILE = "calibration_results/D435_intrinsics.json"
 OUTPUT_DIR = "point_cloud_output"
 USE_ICP_REFINEMENT = True # 设置为 True 启用 ICP 修正
 
@@ -420,6 +420,25 @@ def main():
         
         print(f"\n✅ 原始合并点云点数: {len(merged_cloud)}")
         
+        # --- 空间裁剪 (Workspace Crop) ---
+        # 按照 pointcloud_generator.py 的默认范围进行裁剪
+        workspace_x_range = (-0.4, 0.5)
+        workspace_y_range = (-0.5, 3.0)
+        workspace_z_range = (-0.2, 1.0)
+        
+        xyz = merged_cloud[:, :3]
+        mask = (
+            (xyz[:, 0] >= workspace_x_range[0]) & (xyz[:, 0] <= workspace_x_range[1]) &
+            (xyz[:, 1] >= workspace_y_range[0]) & (xyz[:, 1] <= workspace_y_range[1]) &
+            (xyz[:, 2] >= workspace_z_range[0]) & (xyz[:, 2] <= workspace_z_range[1])
+        )
+        merged_cloud = merged_cloud[mask]
+        print(f"✂️  空间裁剪后点数: {len(merged_cloud)}")
+        
+        if len(merged_cloud) == 0:
+            print("❌ 裁剪后点云为空，请检查裁剪范围或坐标系对齐是否正确。")
+            return
+            
         # 为了给 DP3 使用，通常需要降采样 (例如 4096 或 2048 点)
         # 直接由几十万点做 FPS 会非常慢，建议先体素下采样再 FPS
         

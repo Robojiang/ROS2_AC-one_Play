@@ -259,10 +259,7 @@ def run_solver(folder_name, camera_name, mode="eye_in_hand", marker_id=0):
             )
             print(f"[{meth_name}] Translation: {t_cal.flatten()}")
             
-            # 默认选用 DANIILIDIS，因为它在物理高度上验证正确 (0.62m vs TSAI 0.28m)
-            # 用户反馈实际高度约 60cm，且 check_data_quality 显示 robot_z(0.25) + cam_dist(0.30) ~ 0.55m
-            # 所以 TSAI 的 0.28m 明显是错误收敛 (可能是符号反转或局部极值)
-            if meth_name == "DANIILIDIS":
+            if meth_name == "PARK":
                 best_T = np.eye(4)
                 best_T[:3, :3] = R_cal
                 best_T[:3, 3] = t_cal.flatten()

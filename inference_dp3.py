@@ -684,7 +684,7 @@ def parse_args():
     # parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--max_publish_step', type=int, default=1000)
-    parser.add_argument('--frame_rate', type=int, default=60)
+    parser.add_argument('--frame_rate', type=int, default=30)
     parser.add_argument('--calibration_dir', type=str, default=str(ROOT / 'calibration_results'))
     parser.add_argument('--data', type=str, default=str(ROOT / 'act/data/config.yaml'))
     parser.add_argument('--camera_names', nargs='+', default=['head', 'left_wrist', 'right_wrist'])

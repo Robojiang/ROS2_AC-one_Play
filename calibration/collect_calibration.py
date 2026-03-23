@@ -13,9 +13,11 @@ from pathlib import Path
 
 # Add project root to path
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]
+PROJECT_ROOT = FILE.parents[1]     # 指向 ROS2_AC-one_Play
+ROOT = PROJECT_ROOT / "act"        # 将 ROOT 指向 act 文件夹
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
+    sys.path.append(str(PROJECT_ROOT)) # 也添加项目根目录，方便访问 calibration_data_ark 等
 
 # Load local message definitions & setup paths
 # 必须先调用 setup_loader，否则 RosOperator 内部 import 消息会失败
