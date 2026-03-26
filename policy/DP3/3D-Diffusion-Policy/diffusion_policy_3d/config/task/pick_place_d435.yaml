@@ -1,4 +1,4 @@
-name: pick_place_d405
+name: pick_place_d435
 
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim
@@ -21,7 +21,7 @@ env_runner:
 
 dataset:
   _target_: diffusion_policy_3d.dataset.robot_dataset.RobotDataset
-  zarr_path: datasets_zarr/pick_place_d405.zarr
+  zarr_path: datasets_zarr/pick_place_d435.zarr
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}

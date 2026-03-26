@@ -17,10 +17,10 @@ class PointCloudGenerator:
                  max_depth_hand=0.6,
                  fps_sample_points=1024,
                  use_workspace_crop=True,
-                 workspace_x_range=(-0.4, 0.5),
-                 workspace_y_range=(-0.5, 3.0),
-                 workspace_z_range=(-0.2, 1.0),
-                 voxel_size=0.005,
+                 workspace_x_range=(-1.0, 0.3), # 直接基于 Center Base 的相对范围 (前后各0.4m)
+                 workspace_y_range=(-3.0, 3.0), # 直接基于 Center Base 的相对范围 (左右各1.0m)
+                 workspace_z_range=(-0.2, 1.0), # 直接基于 Center Base 的相对范围 (上下)
+                 voxel_size=0.002,
                  downsample_size=(160, 120),
                  use_random_sampling=True,
                  device=None):
@@ -28,9 +28,9 @@ class PointCloudGenerator:
         self.max_depth_hand = max_depth_hand
         self.fps_sample_points = fps_sample_points
         self.use_workspace_crop = use_workspace_crop
-        self.workspace_x_range = workspace_x_range
-        self.workspace_y_range = workspace_y_range
-        self.workspace_z_range = workspace_z_range
+        self.center_x_range = workspace_x_range
+        self.center_y_range = workspace_y_range
+        self.center_z_range = workspace_z_range
         self.voxel_size = voxel_size
         self.downsample_size = downsample_size
         self.use_random_sampling = use_random_sampling
@@ -145,7 +145,7 @@ class PointCloudGenerator:
              self.intrinsics = intrinsics
              self._init_ray_dirs()
 
-        # 懒加载：只在第一帧计算以此固定 Center Base 和裁剪区域，避免每帧重复计算
+        # 懒加载：只在第一帧计算以此固定 Center Base，避免每帧重复计算
         if not hasattr(self, 'T_CB_LB'):
             # --- 计算双臂基座中点 (作为 Center Base 新全局中心) ---
             # RightBase 在 LeftBase 坐标系下的位姿: T_LB_RB = T_LB_H @ T_H_RB
@@ -155,11 +155,6 @@ class PointCloudGenerator:
             # 构建 LeftBase -> CenterBase 的平移矩阵
             self.T_CB_LB = np.eye(4, dtype=np.float32)
             self.T_CB_LB[:3, 3] = -self.mid_pos
-
-            # 动态调整裁剪区域 (因为点云被平移了 -mid_pos，所以原本的裁剪边界也要平移 -mid_pos)
-            self.center_x_range = (self.workspace_x_range[0] - self.mid_pos[0], self.workspace_x_range[1] - self.mid_pos[0])
-            self.center_y_range = (self.workspace_y_range[0] - self.mid_pos[1], self.workspace_y_range[1] - self.mid_pos[1])
-            self.center_z_range = (self.workspace_z_range[0] - self.mid_pos[2], self.workspace_z_range[1] - self.mid_pos[2])
 
         # --- 计算统一坐标系下的末端位姿 (都在 Center Base 下) ---
         # 1. 左手: 原始在 Left Base, 平移到 Center Base (-mid_pos)
