@@ -7,4 +7,4 @@ source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate robotwin
 
 
-bash train_rgb.sh pick_place_d405 dp3 100 42 0
+bash train.sh pick_place_d435 dp3 100 42 0
