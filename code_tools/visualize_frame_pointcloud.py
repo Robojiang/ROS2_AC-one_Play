@@ -219,7 +219,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="单帧 HDF5 点云可视化工具")
-    parser.add_argument("--hdf5_path", type=str, default="/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/ROS2_AC-one_Play/datasets/pick_place_d435/episode_2.hdf5", help="要读取的 hdf5 文件绝对或相对路径")
+    parser.add_argument("--hdf5_path", type=str, default="datasets/pick_place_d435/episode_2.hdf5", help="要读取的 hdf5 文件绝对或相对路径")
     parser.add_argument("--frame", type=int, default=1, help="要可视化的帧索引 (默认为第 0 帧)")
     args = parser.parse_args()
     main(args)

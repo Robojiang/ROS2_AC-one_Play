@@ -613,11 +613,25 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                         'agent_pos': agent_pos_batch
                     }
                     
+                    # ========== 诊断输出 ==========
+                    print(f"\n[DEBUG] Step {step_count} - 推理前诊断:")
+                    print(f"  Point Cloud shape: {point_cloud_batch.shape}, range: [{point_cloud_batch.min():.3f}, {point_cloud_batch.max():.3f}]")
+                    print(f"  Point Cloud contains NaN: {torch.isnan(point_cloud_batch).any()}, Inf: {torch.isinf(point_cloud_batch).any()}")
+                    print(f"  Agent Pos shape: {agent_pos_batch.shape}, range: [{agent_pos_batch.min():.3f}, {agent_pos_batch.max():.3f}]")
+                    print(f"  Agent Pos sample: {agent_pos_batch[0, 0, :]}")
+                    print(f"  Agent Pos contains NaN: {torch.isnan(agent_pos_batch).any()}, Inf: {torch.isinf(agent_pos_batch).any()}")
+                    
                     # 推理
                     if args.debug: t0 = time.time()
                     actions = policy.predict_action(model_input)  # (1, horizon, action_dim)
-                    if args.debug and step_count % 30 == 0:
-                         print(f"[DEBUG] 推理耗时: {(time.time()-t0)*1000:.1f}ms")
+                    
+                    # ========== 推理后诊断 ==========
+                    print(f"  推理耗时: {(time.time()-t0)*1000:.1f}ms")
+                    print(f"  Actions shape: {actions.shape}")
+                    print(f"  Actions range: [{actions.min():.3f}, {actions.max():.3f}]")
+                    print(f"  Actions contains NaN: {np.isnan(actions).any()}, Inf: {np.isinf(actions).any()}")
+                    print(f"  Actions[0, 0, :7] (左臂第一步): {np.round(actions[0, 0, :7], 3)}")
+                    print(f"  Actions[0, 0, 7:14] (右臂第一步): {np.round(actions[0, 0, 7:14], 3)}")
 
                     current_action_chunk = actions[0]  # (horizon, action_dim)
                     action_execution_idx = 0
@@ -628,6 +642,11 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                     safe_idx = min(action_execution_idx, len(current_action_chunk) - 1)
                     action = current_action_chunk[safe_idx]
                     action_execution_idx += 1
+                    
+                    # ========== 动作诊断 ==========
+                    print(f"[DEBUG] 执行动作 - safe_idx={safe_idx}, action range: [{action.min():.3f}, {action.max():.3f}]")
+                    print(f"  Left arm: {np.round(action[:7], 3)}")
+                    print(f"  Right arm: {np.round(action[7:14], 3)}")
                     
                     if args.debug:
                         if step_count % 30 == 0:
@@ -680,7 +699,7 @@ def parse_args():
     parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST/base', 'GHOST/key'])
     parser.add_argument('--task_name', type=str, default='pick_place_d405')
     # parser.add_argument('--ckpt_name', type=str, help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
-    parser.add_argument('--ckpt_name', type=str, default='3000.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
+    parser.add_argument('--ckpt_name', type=str, default='1500.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     # parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--max_publish_step', type=int, default=1000)
