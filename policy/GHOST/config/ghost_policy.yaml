@@ -115,8 +115,8 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/${now:%H.%M.%S}_${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}
+    dir: data/outputs/${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}_${now:%H.%M.%S}
   sweep:
-    dir: data/outputs/${now:%H.%M.%S}_${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}
+    dir: data/outputs/${name}_${task.name}_${task.dataset_type}_${policy.pointnet_type}_${now:%H.%M.%S}
     subdir: ${hydra.job.num}
 

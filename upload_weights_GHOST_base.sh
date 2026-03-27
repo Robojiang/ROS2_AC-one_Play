@@ -7,9 +7,9 @@ export ALIYUNPAN_VERBOSE=0
 export ALIYUNPAN_BIN=/mnt/afs/250010074/tao_files/aliyunpan-v0.3.7-linux-amd64/aliyunpan
 
 # 本地目录（请更改成你自己的目录）
-LOCAL_DIR="/mnt/afs/250010074/robot_manipulation/ROS2_AC-one_Play/policy/GHOST/data/outputs/21.43.39_ghost_policy_pick_place_d405_hard_pointnet/checkpoints/latest.ckpt"
+LOCAL_DIR="/mnt/afs/250010074/robot_manipulation/ROS2_AC-one_Play/policy/GHOST/data/outputs/00.39.05_ghost_policy_pick_place_d435_hard_pointnet/checkpoints/latest.ckpt"
 # 网盘目录（请更改成你自己的目录）
-PAN_DIR="/weights/pick_place_d405/GHOST/base"
+PAN_DIR="/weights/pick_place_d435/GHOST/base"
 
 # 执行上传
 $ALIYUNPAN_BIN upload -exn "^\." -exn "^@eadir$" "$LOCAL_DIR" "$PAN_DIR"
