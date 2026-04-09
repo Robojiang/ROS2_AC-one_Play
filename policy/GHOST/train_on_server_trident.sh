@@ -6,3 +6,4 @@ source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate robotwin
 
 torchrun --nproc_per_node=4 --master_port=29501 train.py task=pick_place_d435
+torchrun --nproc_per_node=4 --master_port=29501 train.py task=pick_place_d435_low
