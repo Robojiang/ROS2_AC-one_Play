@@ -132,8 +132,8 @@ def get_keyframe_mask(eef_data, gripper_delta=0.05, min_interval=5):
     left_diff = np.abs(np.diff(left_gripper, prepend=left_gripper[0]))
     right_diff = np.abs(np.diff(right_gripper, prepend=right_gripper[0]))
     
-    # 第一帧和最后一帧总是关键帧
-    mask[0] = True
+    # 最后一帧总是关键帧
+    # mask[0] = True
     mask[-1] = True
     
     last_keyframe_idx = 0
@@ -174,7 +174,7 @@ def convert_pose_to_ghost_format(pose_rpy_7d):
 
 # ================= 主转换函数 =================
 
-def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
+def convert_task_to_zarr(task_name, task_dir, max_episodes=None, frame_skip=1):
     """
     将单个任务的HDF5数据转换为Zarr格式
     
@@ -182,12 +182,13 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
         task_name: 任务名称 (文件夹名)
         task_dir: 任务文件夹路径
         max_episodes: 用于debug,只转换前N个episode (None表示转换全部)
+        frame_skip: 抽帧间隔 (默认1即不抽帧, 设为2可从60Hz降至30Hz)
     """
     import math
 
     # 自动扫描HDF5文件
     print(f"\n{'='*80}")
-    print(f"🎯 任务: {task_name}")
+    print(f"🎯 任务: {task_name} (抽帧间隔: {frame_skip})")
     print(f"{'='*80}")
     print(f"📁 数据目录: {task_dir}")
     
@@ -200,7 +201,8 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
     
     # 输出路径
     os.makedirs(DATASETS_ZARR_DIR, exist_ok=True)
-    save_dir = os.path.join(DATASETS_ZARR_DIR, f"{task_name}.zarr")
+    suffix = "_low" if frame_skip > 1 else ""
+    save_dir = os.path.join(DATASETS_ZARR_DIR, f"{task_name}{suffix}.zarr")
     
     if os.path.exists(save_dir):
         print(f"⚠️  删除已存在的文件: {save_dir}")
@@ -273,6 +275,12 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
         try:
             # 读取HDF5数据
             data = load_hdf5_episode(hdf5_path)
+            
+            # --- 🚀 抽帧降采样逻辑 ---
+            if frame_skip > 1:
+                for k in data.keys():
+                    data[k] = data[k][::frame_skip]
+            
             eef_data = data['eef']
             qpos_data = data['qpos']
             
@@ -328,8 +336,9 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
             # 创建4个相机的图像 (如果只有3个,复制一个)
             images = np.stack([head_resized, head_resized, left_resized, right_resized], axis=1)  # (T, 4, 240, 320, 3)
             
-            # 计算关键帧mask
-            keyframe_mask = get_keyframe_mask(eef_data, GRIPPER_DELTA, MIN_INTERVAL)
+            # 计算关键帧mask (如果进行抽帧降维，应当同步缩放最小间隔，但不能小于 1)
+            min_interval_adjusted = max(1, MIN_INTERVAL // frame_skip)
+            keyframe_mask = get_keyframe_mask(eef_data, GRIPPER_DELTA, min_interval_adjusted)
             
             # 准备episode数据 (state[t] + action[t] -> state[t+1])
             ep_state = qpos_data[:-1]  # (T-1, 14)
@@ -429,13 +438,14 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None):
     print(f"{'='*80}\n")
 
 
-def convert_all_tasks(max_episodes=None, task_filter=None):
+def convert_all_tasks(max_episodes=None, task_filter=None, frame_skip=1):
     """
     转换datasets目录下所有任务
     
     Args:
         max_episodes: 每个任务最多转换多少个episode (None表示全部)
         task_filter: 任务名称过滤器 (None表示全部任务, 或指定任务名列表)
+        frame_skip: 抽帧间隔 (默认1代表不抽帧，2代表60Hz降采样到30Hz)
     """
     print("\n" + "="*80)
     print("🚀 HDF5 to Zarr 批量转换工具")
@@ -482,7 +492,7 @@ def convert_all_tasks(max_episodes=None, task_filter=None):
     
     for task_name, task_path in task_dirs:
         try:
-            convert_task_to_zarr(task_name, task_path, max_episodes)
+            convert_task_to_zarr(task_name, task_path, max_episodes, frame_skip)
             success_count += 1
         except Exception as e:
             print(f"\n❌ 任务 {task_name} 转换失败: {e}")
@@ -506,10 +516,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="将HDF5数据集转换为Zarr格式 (含点云生成)")
     parser.add_argument("--max_episodes", type=int, default=None, help="每个任务最多转换多少个episodes (None表示全部)")
     parser.add_argument("--task", type=str, default=None, help="指定要转换的任务名称 (默认转换所有任务)")
+    parser.add_argument("--frame_skip", type=int, default=1, help="抽帧倍数: 默认为1不抽帧，设为2可将60Hz降采样至30Hz")
     
     args = parser.parse_args()
     
     convert_all_tasks(
         max_episodes=args.max_episodes,
-        task_filter=args.task
+        task_filter=args.task,
+        frame_skip=args.frame_skip
     )
