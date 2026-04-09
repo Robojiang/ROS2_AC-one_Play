@@ -127,9 +127,11 @@ def main(args):
     # 注意：此处使用的参数需与 convert_hdf5_to_zarr 保持一致
     pc_generator = PointCloudGenerator(
         intrinsics=intrinsics,
-        fps_sample_points=1024, # 为了清晰，可视化可以使用更多的点数 (你可以改回1024)
+        fps_sample_points=4000, # 为了清晰，可视化可以使用更多的点数 (你可以改回1024)
         use_workspace_crop=True,
-        downsample_size=(160, 120),  # 与生成器中保持一致
+        workspace_z_range=(-3,3),
+        downsample_size=(160, 120),
+          # 与生成器中保持一致
     )
     
     print("🌟 正在生成组合点云...")

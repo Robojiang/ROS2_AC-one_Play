@@ -622,11 +622,12 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                     print(f"  Agent Pos contains NaN: {torch.isnan(agent_pos_batch).any()}, Inf: {torch.isinf(agent_pos_batch).any()}")
                     
                     # 推理
-                    if args.debug: t0 = time.time()
+                    t0 = time.time()
                     actions = policy.predict_action(model_input)  # (1, horizon, action_dim)
+                    inference_time = (time.time() - t0) * 1000
                     
                     # ========== 推理后诊断 ==========
-                    print(f"  推理耗时: {(time.time()-t0)*1000:.1f}ms")
+                    print(f"  推理耗时: {inference_time:.1f}ms")
                     print(f"  Actions shape: {actions.shape}")
                     print(f"  Actions range: [{actions.min():.3f}, {actions.max():.3f}]")
                     print(f"  Actions contains NaN: {np.isnan(actions).any()}, Inf: {np.isinf(actions).any()}")
@@ -697,7 +698,7 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--policy', type=str, default='DP3', choices=['DP3', 'GHOST/base', 'GHOST/key'])
-    parser.add_argument('--task_name', type=str, default='pick_place_d405')
+    parser.add_argument('--task_name', type=str, default='pick_place_d435')
     # parser.add_argument('--ckpt_name', type=str, help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     parser.add_argument('--ckpt_name', type=str, default='1500.ckpt', help='Checkpoint filename (e.g., 750.ckpt, latest.ckpt)')
     # parser.add_argument('--debug', action='store_true', default=True)
