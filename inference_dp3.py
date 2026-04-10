@@ -194,6 +194,54 @@ def get_ghost_agent_pos(qpos, left_pos, left_quat, right_pos, right_quat):
 
 SAFE_INIT_POSITION = [0.0, 0, 0, 0, 0.0, 0.0, 0]
 
+import re
+
+# ================= 安全限幅配置 (动态加载) =================
+def load_clip_bounds(task_name):
+    """从 analysis_output 根据 task_name 动态读取限幅配置"""
+    clip_path = ROOT / "analysis_output" / task_name / "clip_bounds.txt"
+    if not clip_path.exists():
+        print(f"[WARN] 未找到任务 {task_name} 的限幅文件: {clip_path}，将禁用安全限幅！")
+        return None, None, None
+        
+    with open(clip_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+        
+    def extract_array(var_name):
+        pattern = var_name + r'\s*=\s*np\.array\(\[([\s\S]*?)\]\)'
+        match = re.search(pattern, content)
+        if match:
+            nums_str = match.group(1).replace('\n', '')
+            return np.fromstring(nums_str, sep=',')
+        return None
+        
+    abs_min = extract_array('absolute_min')
+    abs_max = extract_array('absolute_max')
+    max_delta = extract_array('max_delta')
+    
+    if abs_min is not None and abs_max is not None and max_delta is not None:
+        print(f"[INFO] 成功加载 {task_name} 的安全动作限幅参数！")
+        return abs_min, abs_max, max_delta
+    else:
+        print(f"[WARN] 无法解析限幅文件 {clip_path} 里的数组格式，将禁用安全限幅！")
+        return None, None, None
+
+def apply_action_clipping(target_action, current_qpos, abs_min, abs_max, max_delta):
+    """
+    对推理输出的动作进行安全双重限幅 (单步最大位移 + 绝对位置边界)
+    """
+    if abs_min is None or abs_max is None or max_delta is None:
+        return target_action # 未加载成功时不干预，原封不动返回预测值
+        
+    # 1. 相对单步限幅 (Delta Clip) - 防止突变抽搐
+    delta = target_action - current_qpos
+    delta_clipped = np.clip(delta, -max_delta, max_delta)
+    safe_action = current_qpos + delta_clipped
+    
+    # 2. 绝对位置限幅 (Absolute Clip) - 防止超出安全工作空间
+    safe_action = np.clip(safe_action, abs_min, abs_max)
+    return safe_action
+# ==========================================================
 
 def load_yaml(yaml_file):
     try:
@@ -464,6 +512,9 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
     """推理进程 - 使用统一模型加载器"""
     print("[INFO] 推理进程启动")
     
+    # 0. 动态加载当前任务的专属动作限幅参数
+    clip_abs_min, clip_abs_max, clip_max_delta = load_clip_bounds(args.task_name)
+    
     # 1. 加载策略（使用新的 model_loader）
     policy = load_policy_model(
         policy_name=args.policy,
@@ -641,8 +692,15 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                 if current_action_chunk is not None:
                     # 防止索引越界
                     safe_idx = min(action_execution_idx, len(current_action_chunk) - 1)
-                    action = current_action_chunk[safe_idx]
+                    raw_action = current_action_chunk[safe_idx]
                     action_execution_idx += 1
+                    
+                    # ========== 动作安全限幅 ==========
+                    # 基于当前真实位置 obs_dict['qpos'] 以及专属限制参数，对 target_action 输出进行限制
+                    action = apply_action_clipping(
+                        raw_action, obs_dict['qpos'],
+                        clip_abs_min, clip_abs_max, clip_max_delta
+                    )
                     
                     # ========== 动作诊断 ==========
                     print(f"[DEBUG] 执行动作 - safe_idx={safe_idx}, action range: [{action.min():.3f}, {action.max():.3f}]")
