@@ -13,3 +13,9 @@ PAN_DIR="/weights/pick_place_d435/GHOST/base/latest.ckpt"
 
 # 执行下载
 "$ALIYUNPAN_BIN" download --saveto "$LOCAL_DIR" "$PAN_DIR"
+
+# 网盘目录（请更改成你自己的目录）
+PAN_DIR="/weights/pick_place_d435_low/GHOST/base/latest.ckpt"
+
+# 执行下载
+"$ALIYUNPAN_BIN" download --saveto "$LOCAL_DIR" "$PAN_DIR"
