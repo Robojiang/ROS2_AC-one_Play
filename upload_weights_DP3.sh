@@ -13,3 +13,10 @@ PAN_DIR="/weights/pick_place_d435/DP3"
 
 # 执行上传
 $ALIYUNPAN_BIN upload -exn "^\." -exn "^@eadir$" "$LOCAL_DIR" "$PAN_DIR"
+
+LOCAL_DIR="/mnt/afs/250010074/robot_manipulation/ROS2_AC-one_Play/policy/DP3/checkpoints/pick_place_d435_low-dp3-100_42/1500.ckpt"
+# 网盘目录（请更改成你自己的目录）
+PAN_DIR="/weights/pick_place_d435_low/DP3"
+
+# 执行上传
+$ALIYUNPAN_BIN upload -exn "^\." -exn "^@eadir$" "$LOCAL_DIR" "$PAN_DIR"
