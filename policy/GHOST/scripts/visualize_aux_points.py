@@ -320,7 +320,7 @@ def visualize_dataset_dynamic(zarr_path, episode_idx=0, save_video=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize GHOST Dataset with Aux Points Dynamically")
     parser.add_argument("--zarr_path", type=str, 
-                        default="/home/arx/haitao_codes/ROS2_AC-one_Play/debug_obs/debug_DP3_1773047769.zarr",
+                        default="datasets_zarr/pick_place_d435.zarr",
                         help="Path to zarr dataset")
     parser.add_argument("--episode", type=int, default=0, help="Episode index")
     parser.add_argument("--save_video", type=bool, default=True, help="Save as MP4 video")

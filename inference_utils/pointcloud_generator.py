@@ -17,12 +17,13 @@ class PointCloudGenerator:
                  max_depth_hand=0.6,
                  fps_sample_points=1024,
                  use_workspace_crop=True,
-                 workspace_x_range=(-1.0, 0.3), # 直接基于 Center Base 的相对范围 (前后各0.4m)
-                 workspace_y_range=(-3.0, 3.0), # 直接基于 Center Base 的相对范围 (左右各1.0m)
-                 workspace_z_range=(-0.2, 1.0), # 直接基于 Center Base 的相对范围 (上下)
+                 workspace_x_range=(-1.0, 0.5), # 直接基于 Center Base 的相对范围 (前后各0.4m)
+                 workspace_y_range=(-0.3, 0.3), # 直接基于 Center Base 的相对范围 (左右各0.3m)
+                 workspace_z_range=(-0.195, 1.0), # 直接基于 Center Base 的相对范围 (上下)
                  voxel_size=0.002,
                  downsample_size=(160, 120),
                  use_random_sampling=True,
+                 include_head_camera=False,
                  device=None):
         self.max_depth_head = max_depth_head
         self.max_depth_hand = max_depth_hand
@@ -34,6 +35,7 @@ class PointCloudGenerator:
         self.voxel_size = voxel_size
         self.downsample_size = downsample_size
         self.use_random_sampling = use_random_sampling
+        self.include_head_camera = include_head_camera
         self.device = torch.device(device) if device else (torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
 
         # 兼容推理/训练两种用法，若初始化时未提供内参，将在第一次generate时初始化
@@ -182,9 +184,10 @@ class PointCloudGenerator:
 
         clouds = []
         # 1. Head Camera
-        pc_head = self.depth_to_pointcloud(head_depth, head_color, 'head', max_depth=self.max_depth_head)
-        if len(pc_head) > 0:
-            clouds.append(pc_head)
+        if self.include_head_camera:
+            pc_head = self.depth_to_pointcloud(head_depth, head_color, 'head', max_depth=self.max_depth_head)
+            if len(pc_head) > 0:
+                clouds.append(pc_head)
         # 2. Left Wrist Camera
         pc_left = self.depth_to_pointcloud(left_depth, left_color, 'left', max_depth=self.max_depth_hand)
         if len(pc_left) > 0:

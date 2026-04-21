@@ -10,23 +10,23 @@ from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 
 # ================= 配置 =================
-HDF5_PATH = "/home/arx/haitao_codes/ROS2_AC-one_Play/act/datasets/episode_0.hdf5"
-CALIBRATION_DIR = "/home/arx/haitao_codes/ROS2_AC-one_Play/calibration_results"
-INTRINSICS_FILE = "/home/arx/haitao_codes/ROS2_AC-one_Play/calibration_results/D405_intrinsics.json"
+HDF5_PATH = "datasets/pick_place_d435/episode_0.hdf5"
+CALIBRATION_DIR = "calibration_results"
+INTRINSICS_FILE = "calibration_results/D435_intrinsics.json"
 
 FRAME_INDEX = 0  # 读取第一帧
 MAX_DEPTH_Head = 1 # 最大深度限制 (米)
 MAX_DEPTH_Hand = 0.6  # 最大深度限制 (米)
 FPS_SAMPLE_POINTS = 2048  # FPS采样点数
 
-# 工作空间裁剪 (相对于左臂基座坐标系)
+# 工作空间裁剪 (相对于选定的 OUTPUT_FRAME 坐标系)
 USE_WORKSPACE_CROP = True  # 是否启用工作空间裁剪
-WORKSPACE_X_RANGE = [-0.4, 0.5]  # x轴范围 (米)
-WORKSPACE_Y_RANGE = [-0.5, 3]  # y轴范围 (米)
-WORKSPACE_Z_RANGE = [-0.2, 1]  # z轴范围 (米)
+WORKSPACE_X_RANGE = [-1.0, 0.5]  # x轴范围 (米)
+WORKSPACE_Y_RANGE = [-0.3, 0.3]  # y轴范围 (米)
+WORKSPACE_Z_RANGE = [-0.195, 1.0]  # z轴范围 (米)
 
 # 输出坐标系选择
-OUTPUT_FRAME = 'left_base'  # 'head' 或 'left_base' - 最终点云相对的坐标系
+OUTPUT_FRAME = 'center_base'  # 'head'、'left_base' 或 'center_base' - 最终点云相对的坐标系
 
 # ================= 辅助函数 =================
 
@@ -316,9 +316,52 @@ def main():
         
         print(f"    变换后位置: {T_total_right[:3, 3]}")
     
-    # 5. 坐标系转换 (可选: 转换到左臂基座坐标系)
+    # 5. 坐标系转换 (转换到目标坐标系)
     print("\n" + "="*80)
-    if OUTPUT_FRAME == 'left_base':
+    if OUTPUT_FRAME == 'center_base':
+        print("🔄 转换坐标系: Head -> Center Base (双臂中点)")
+        # T_LB_H 本质上表示 Left Base -> Head
+        T_LB_H_inv = T_LB_H
+        T_LB_RB = T_LB_H_inv @ T_H_RB
+        
+        # 计算中点并求出平移矩阵 Left Base -> Center Base
+        mid_pos = (T_LB_RB[:3, 3] / 2.0).astype(np.float32)
+        T_CB_LB = np.eye(4, dtype=np.float32)
+        T_CB_LB[:3, 3] = -mid_pos
+        
+        # 求解 Head -> Center Base
+        T_CB_H = T_CB_LB @ T_LB_H_inv
+        
+        clouds_in_center_base = []
+        for cloud in clouds_global:
+            if len(cloud) > 0:
+                cloud_transformed = transform_point_cloud(cloud, T_CB_H)
+                clouds_in_center_base.append(cloud_transformed)
+        
+        clouds_global = clouds_in_center_base
+        
+        coordinate_frames_center = []
+        for T, label, size in coordinate_frames:
+            T_new = T_CB_H @ T
+            coordinate_frames_center.append((T_new, label, size))
+        
+        # 添加机械臂专属坐标系
+        coordinate_frames_center.append((np.eye(4), "Center_Base", 0.25))
+        coordinate_frames_center.append((T_CB_LB, "Left_Base", 0.2))
+        coordinate_frames_center.append((T_CB_LB @ T_LB_LE, "Left_End", 0.12))
+        T_CB_RB = T_CB_LB @ T_LB_RB
+        coordinate_frames_center.append((T_CB_RB, "Right_Base", 0.2))
+        coordinate_frames_center.append((T_CB_RB @ T_RB_RE, "Right_End", 0.12))
+        
+        coordinate_frames = coordinate_frames_center
+        
+        print(f"   ✅ 已转换到 Center Base 坐标系")
+        print(f"\n📍 坐标系位置 (相对于 Center Base):")
+        print(f"   Center Base: [0, 0, 0] (原点)")
+        print(f"   Left Base:   {T_CB_LB[:3, 3]}")
+        print(f"   Right Base:  {T_CB_RB[:3, 3]}")
+
+    elif OUTPUT_FRAME == 'left_base':
         print("🔄 转换坐标系: Head -> Left Base")
         # T_LB_H 是 Left Base -> Head 的变换
         # 我们需要 Head -> Left Base, 所以取逆
@@ -412,7 +455,7 @@ def main():
     
     if len(clouds_global) > 0:
         print("\n👀 显示原始拼接结果...")
-        frame_name = "Left_Base" if OUTPUT_FRAME == 'left_base' else "Head"
+        frame_name = "Center_Base" if OUTPUT_FRAME == 'center_base' else ("Left_Base" if OUTPUT_FRAME == 'left_base' else "Head")
         visualize_merged(clouds_global, 
                         title=f"Original Merged (Frame: {frame_name})", 
                         coordinate_frames=coordinate_frames)
@@ -453,13 +496,16 @@ def main():
         
         # 显示 FPS 结果
         print(f"\n👀 显示 FPS 下采样结果 ({len(fps_cloud)} 点)...")
-        frame_name = "Left_Base" if OUTPUT_FRAME == 'left_base' else "Head"
+        frame_name = "Center_Base" if OUTPUT_FRAME == 'center_base' else ("Left_Base" if OUTPUT_FRAME == 'left_base' else "Head")
         visualize_merged([fps_cloud], 
                         title=f"FPS Sampled ({FPS_SAMPLE_POINTS} points, Frame: {frame_name})", 
                         coordinate_frames=coordinate_frames)
         
         # 保存结果
-        frame_suffix = "leftbase" if OUTPUT_FRAME == 'left_base' else "head"
+        if OUTPUT_FRAME == 'center_base': frame_suffix = "centerbase"
+        elif OUTPUT_FRAME == 'left_base': frame_suffix = "leftbase"
+        else: frame_suffix = "head"
+        
         output_path = f"pointcloud_frame{FRAME_INDEX}_fps{FPS_SAMPLE_POINTS}_{frame_suffix}.npy"
         # np.save(output_path, fps_cloud)
         print(f"\n💾 已保存点云到: {output_path}")

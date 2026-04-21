@@ -225,10 +225,8 @@ def convert_task_to_zarr(task_name, task_dir, max_episodes=None, frame_skip=1):
     if np.array_equal(T_RB_H, np.eye(4)):
         T_RB_H = load_calibration_matrix("head_base_to_right.npy")
     
-    # 注意: 文件名head_base_to_left实际表示 Head->LeftBase 的变换
-    # 文件名head_base_to_right实际表示 RightBase->Head 的变换 (需要取逆得到Head->RightBase)
-    # 和pointcloud_from_hdf5.py保持一致
-    T_H_LB = T_LB_H
+    # 注意: 需要取逆才能从 Base 转到 HeadCam
+    T_H_LB = np.linalg.inv(T_LB_H)
     T_H_RB = np.linalg.inv(T_RB_H)
     
     intrinsics = {

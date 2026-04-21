@@ -248,7 +248,7 @@ def visualize_keyframe_policy(zarr_path, episode_idx=0, save_video=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--zarr_path", type=str, 
-                        default="/media/tao/E8F6F2ECF6F2BA40/bimanial_manipulation/RoboTwin/arx_data/ROS2_AC-one_Play/datasets_zarr/pick_place_d405.zarr",
+                        default="datasets_zarr/pick_place_d435.zarr",
                         help="Path to zarr dataset")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--save_video", default=True, type=bool, help="Whether to save the visualization as video")
