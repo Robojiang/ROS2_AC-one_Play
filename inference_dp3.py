@@ -529,7 +529,9 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
     print(f"[INFO] 模型加载完成: n_obs_steps={n_obs_steps}, n_action_steps={n_action_steps}")
     
     # 2. 创建点云生成器
-    pc_generator = PointCloudGenerator()
+    pc_generator = PointCloudGenerator(
+        include_head_camera=('head' in args.camera_names)
+    )
     
     # 3. 观测缓存 - 用于构建历史观测
     obs_buffer = []  # 存储 (point_cloud, agent_pos) 元组
@@ -570,12 +572,12 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                 
                 # 生成点云 (获取统一坐标系下的末端位姿)
                 point_cloud, transformed_eef = pc_generator.generate(
-                    head_depth=obs_dict['images_depth']['head'],
-                    head_color=obs_dict['images']['head'],
-                    left_depth=obs_dict['images_depth']['left_wrist'],
-                    left_color=obs_dict['images']['left_wrist'],
-                    right_depth=obs_dict['images_depth']['right_wrist'],
-                    right_color=obs_dict['images']['right_wrist'],
+                    head_depth=obs_dict['images_depth'].get('head'),
+                    head_color=obs_dict['images'].get('head'),
+                    left_depth=obs_dict['images_depth'].get('left_wrist'),
+                    left_color=obs_dict['images'].get('left_wrist'),
+                    right_depth=obs_dict['images_depth'].get('right_wrist'),
+                    right_color=obs_dict['images'].get('right_wrist'),
                     left_eef=obs_dict['eef'][:7],
                     right_eef=obs_dict['eef'][7:14],
                     intrinsics=calibration_data['intrinsics'],
@@ -767,7 +769,7 @@ def parse_args():
     parser.add_argument('--frame_rate', type=int, default=30)
     parser.add_argument('--calibration_dir', type=str, default=str(ROOT / 'calibration_results'))
     parser.add_argument('--data', type=str, default=str(ROOT / 'act/data/config.yaml'))
-    parser.add_argument('--camera_names', nargs='+', default=['head', 'left_wrist', 'right_wrist'])
+    parser.add_argument('--camera_names', nargs='+', default=['left_wrist', 'right_wrist']) # default=['head', 'left_wrist', 'right_wrist'])
     parser.add_argument('--use_depth_image', action='store_true', default=True)
     parser.add_argument('--use_base', action='store_true')
     return parser.parse_args()

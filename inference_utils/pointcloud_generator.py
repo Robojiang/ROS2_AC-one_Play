@@ -184,24 +184,26 @@ class PointCloudGenerator:
 
         clouds = []
         # 1. Head Camera
-        if self.include_head_camera:
+        if self.include_head_camera and head_depth is not None and head_color is not None:
             pc_head = self.depth_to_pointcloud(head_depth, head_color, 'head', max_depth=self.max_depth_head)
             if len(pc_head) > 0:
                 clouds.append(pc_head)
         # 2. Left Wrist Camera
-        pc_left = self.depth_to_pointcloud(left_depth, left_color, 'left', max_depth=self.max_depth_hand)
-        if len(pc_left) > 0:
-            T_LB_LE = self.eef_to_matrix(left_eef)
-            T_total_left = T_H_LB @ T_LB_LE @ T_LE_LC
-            pc_left = self.transform_pointcloud(pc_left, T_total_left)
-            clouds.append(pc_left)
+        if left_depth is not None and left_color is not None:
+            pc_left = self.depth_to_pointcloud(left_depth, left_color, 'left', max_depth=self.max_depth_hand)
+            if len(pc_left) > 0:
+                T_LB_LE = self.eef_to_matrix(left_eef)
+                T_total_left = T_H_LB @ T_LB_LE @ T_LE_LC
+                pc_left = self.transform_pointcloud(pc_left, T_total_left)
+                clouds.append(pc_left)
         # 3. Right Wrist Camera
-        pc_right = self.depth_to_pointcloud(right_depth, right_color, 'right', max_depth=self.max_depth_hand)
-        if len(pc_right) > 0:
-            T_RB_RE = self.eef_to_matrix(right_eef)
-            T_total_right = T_H_RB @ T_RB_RE @ T_RE_RC
-            pc_right = self.transform_pointcloud(pc_right, T_total_right)
-            clouds.append(pc_right)
+        if right_depth is not None and right_color is not None:
+            pc_right = self.depth_to_pointcloud(right_depth, right_color, 'right', max_depth=self.max_depth_hand)
+            if len(pc_right) > 0:
+                T_RB_RE = self.eef_to_matrix(right_eef)
+                T_total_right = T_H_RB @ T_RB_RE @ T_RE_RC
+                pc_right = self.transform_pointcloud(pc_right, T_total_right)
+                clouds.append(pc_right)
         
         # --- 合并 ---
         if len(clouds) == 0:

@@ -6,9 +6,9 @@ shell_exec="exec $shell_type"
 
 declare -A CAMS=(
   # 
-  [camera_h]="135222070706" # D435 new 135122077817 135222070706
+  # [camera_h]="135222070706" # D435 new 135122077817 135222070706
   # [camera_h]="409122273228"  # D405
-  [camera_l]="409122273564"
+  [camera_l]="260322272375"
   [camera_r]="352122274412"
 )
 

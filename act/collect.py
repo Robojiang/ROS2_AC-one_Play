@@ -403,8 +403,8 @@ def parse_arguments(known=False):
 
     # 图像处理选项
     parser.add_argument('--camera_names', nargs='+', type=str,
-                        choices=['head', 'left_wrist', 'right_wrist', ],
-                        default=['head', 'left_wrist', 'right_wrist'], help='camera names')
+                        choices=['left_wrist', 'right_wrist', ],
+                        default=['left_wrist', 'right_wrist'], help='camera names')
     parser.add_argument('--use_depth_image', action='store_true', help='use depth image')
 
     # 机器人选项

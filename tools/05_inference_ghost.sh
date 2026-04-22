@@ -21,5 +21,5 @@ gnome-terminal --title="realsense" -x $shell_type -i -c "cd ${workspace}; cd ../
 sleep 3
 
 # Inference
-gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ..; conda activate dp3; python inference_dp3.py --policy GHOST/base --ckpt_name latest.ckpt --use_depth_image; $shell_exec"   
-# gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ..; conda activate dp3; python inference_dp3.py --task_name pick_place_d435_low --policy GHOST/base --ckpt_name latest.ckpt --use_depth_image; $shell_exec"   
+# gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ..; conda activate dp3; python inference_dp3.py --policy GHOST/base --ckpt_name latest.ckpt --use_depth_image; $shell_exec"   
+gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ..; conda activate dp3; python inference_dp3.py --task_name pick_place_d435_low --policy GHOST/base --ckpt_name latest.ckpt --use_depth_image; $shell_exec"   
