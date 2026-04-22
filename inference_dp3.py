@@ -701,6 +701,8 @@ def inference_process(args, shm_dict, shapes, calibration_data, ros_proc):
                         raw_action, obs_dict['qpos'],
                         clip_abs_min, clip_abs_max, clip_max_delta
                     )
+                    action = raw_action
+                        
                     
                     # ========== 动作诊断 ==========
                     print(f"[DEBUG] 执行动作 - safe_idx={safe_idx}, action range: [{action.min():.3f}, {action.max():.3f}]")

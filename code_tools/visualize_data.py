@@ -229,7 +229,7 @@ def visualize_episode(hdf5_path, fps=10, start_frame=0):
 
 def main():
     parser = argparse.ArgumentParser(description="可视化HDF5数据集")
-    parser.add_argument("--file", type=str, default="act/datasets/episode_43.hdf5",  # /home/arx/ROS2_AC-one_Play/act/datasets_fixed/episode_0.hdf5
+    parser.add_argument("--file", type=str, default="act/datasets/episode_143.hdf5",  # /home/arx/ROS2_AC-one_Play/act/datasets_fixed/episode_0.hdf5
                        help="HDF5文件路径")                                       # datasets/episode_0.hdf5
     parser.add_argument("--fps", type=int, default=10, 
                        help="播放帧率")

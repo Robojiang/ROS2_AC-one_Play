@@ -22,3 +22,5 @@ sleep 3
 
 # Inference
 gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ..; conda activate dp3; python inference_dp3.py --use_depth_image; $shell_exec"   
+
+# gnome-terminal --title="inference" -x $shell_type -i -c "cd ${workspace}; cd ..; conda activate dp3; python inference_dp3.py --task_name pick_place_d435_low --use_depth_image; $shell_exec"   
